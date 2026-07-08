@@ -23,6 +23,7 @@ export default function App() {
   const [selectedCategory, setSelectedCategory] = useState<string | null>(null);
   const [sortBy, setSortBy] = useState<'name' | 'recent' | 'goals' | 'categories'>('name');
   const [isHoveringSort, setIsHoveringSort] = useState(false);
+  const [isSearchExpanded, setIsSearchExpanded] = useState(false);
   const [isSettingsOpen, setIsSettingsOpen] = useState(false);
   const [showGraphView, setShowGraphView] = useState(false);
   
@@ -66,8 +67,13 @@ export default function App() {
         setNeedsAuth(false);
         await loadData(result.accessToken);
       }
-    } catch (err) {
+    } catch (err: any) {
       console.error('Login failed:', err);
+      if (err.code === 'auth/unauthorized-domain') {
+        alert(`Domain not authorized. Please add ${window.location.hostname} to your Firebase Console (Authentication > Settings > Authorized domains).`);
+      } else {
+        alert("Login failed: " + err.message);
+      }
     } finally {
       setIsLoggingIn(false);
     }
@@ -87,8 +93,9 @@ export default function App() {
       
       // Process reminders in the background
       processReminders(token, loadedContacts, currentSpreadsheetId);
-    } catch (err) {
+    } catch (err: any) {
       console.error('Failed to load data:', err);
+      alert(`Failed to load data from Google Sheets. Please ensure you have enabled the Google Sheets API in your Google Cloud Console. Error: ${err.message}`);
       // If we failed, maybe spreadsheet was deleted, clear it to recreate next time
       localStorage.removeItem('rolodex_spreadsheet_id');
       setAppSpreadsheetId(null);
@@ -259,23 +266,35 @@ export default function App() {
       <header className="h-20 bg-[#fbfaf5]/80 backdrop-blur-md border-b border-[#f0eee0] shrink-0 z-20 sticky top-0 transition-all duration-300">
         <div className="max-w-7xl mx-auto px-6 h-full flex items-center justify-between">
           <div className="flex items-center gap-3">
-            <h1 className="text-2xl font-serif italic text-[#5a5a40] tracking-tight">Rolodex</h1>
+            <h1 className="text-2xl font-serif italic text-[#5a5a40] tracking-tight">Roldex</h1>
           </div>
           
           <div className="flex items-center gap-4">
             {loading && <Loader2 className="w-5 h-5 animate-spin text-[#8e8a75]" />}
             
-            <div className="relative flex items-center group">
-              <Search className="absolute left-3 text-[#a8a38d] z-10 pointer-events-none" size={16} />
+            <motion.div 
+              className="relative flex items-center group bg-[#f4f1e6] border border-[#e0dbc5] shadow-inner overflow-hidden"
+              initial={false}
+              animate={{
+                width: (isSearchExpanded || searchTerm) ? 220 : 40,
+                borderRadius: 9999
+              }}
+              onHoverStart={() => setIsSearchExpanded(true)}
+              onHoverEnd={() => setIsSearchExpanded(false)}
+              transition={{ duration: 0.2, ease: "easeOut" }}
+            >
+              <Search className="absolute left-3 text-[#a8a38d] z-10 pointer-events-none transition-colors duration-300 group-hover:text-[#5a5a40]" size={16} />
               <input
                 type="text"
                 placeholder="Search..."
                 value={searchTerm}
                 onChange={(e) => setSearchTerm(e.target.value)}
-                className="w-8 focus:w-48 sm:w-48 bg-transparent focus:bg-white border border-transparent focus:border-[#e0dbc5] rounded-full py-1.5 pl-9 pr-4 text-sm outline-none transition-all duration-300 placeholder-transparent focus:placeholder-[#a8a38d] shadow-none focus:shadow-sm"
+                onFocus={() => setIsSearchExpanded(true)}
+                onBlur={() => setIsSearchExpanded(false)}
+                className="w-full h-10 bg-transparent py-1.5 pl-10 pr-4 text-sm outline-none placeholder-[#a8a38d] focus:bg-white transition-colors duration-300"
               />
-            </div>
-            
+            </motion.div>
+
             <button
               onClick={() => setIsSettingsOpen(true)}
               className="text-[#8e8a75] hover:text-[#5a5a40] transition-colors p-1"
@@ -283,7 +302,6 @@ export default function App() {
             >
               <Settings size={20} />
             </button>
-
             {user?.photoURL && (
               <img src={user.photoURL} alt="Profile" className="w-8 h-8 rounded-full border border-[#e0dbc5]" />
             )}
@@ -383,7 +401,7 @@ export default function App() {
               </div>
               <h3 className="text-xl font-serif text-[#4a453e] mb-2">Your circle is empty</h3>
               <p className="text-[#6d6858] text-sm mb-6 max-w-md mx-auto">
-                Add the people you meet to build your personal relationship manager. Rolodex will remind you to keep in touch.
+                Add the people you meet to build your personal relationship manager. Roldex will remind you to keep in touch.
               </p>
               <motion.button
                 whileHover={{ scale: 1.02, transition: { duration: 0.2 } }}

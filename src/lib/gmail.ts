@@ -1,6 +1,6 @@
 export async function sendReminderEmail(token: string, toEmail: string, contactName: string) {
   const subject = `Reminder: Reach out to ${contactName}`;
-  const message = `Hello,\n\nThis is a reminder from your Rolodex to reach out to ${contactName}.\n\nIt's been a while since your last contact. Log into your Rolodex to view their details and record your next interaction!\n\nBest,\nYour Rolodex`;
+  const message = `Hello,\n\nThis is a reminder from your Roldex to reach out to ${contactName}.\n\nIt's been a while since your last contact. Log into your Roldex to view their details and record your next interaction!\n\nBest,\nYour Roldex`;
   
   const rawMessage = [
     `To: ${toEmail}`,

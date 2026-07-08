@@ -11,14 +11,10 @@ export function AuthScreen({ onLogin, isLoggingIn }: AuthScreenProps) {
     <div className="min-h-screen bg-[#fbfaf5] text-[#4a453e] flex items-center justify-center p-4 font-sans">
       <div className="max-w-md w-full bg-[#f4f1e6] rounded-[32px] shadow-sm border border-[#e0dbc5] p-10 text-center space-y-6">
         <div className="space-y-2">
-          <h1 className="text-4xl font-serif italic text-[#5a5a40] tracking-tight">Rolodex</h1>
+          <h1 className="text-4xl font-serif italic text-[#5a5a40] tracking-tight">Roldex</h1>
           <p className="text-xs uppercase tracking-widest text-[#8e8a75] mt-1">Remember Who You Know</p>
         </div>
         
-        <p className="text-sm text-[#6d6858] pb-4 leading-relaxed">
-          Rolodex stores your contacts securely in your own Google Drive and uses your Gmail to send you friendly reminders to keep in touch.
-        </p>
-
         <button
           onClick={onLogin}
           disabled={isLoggingIn}

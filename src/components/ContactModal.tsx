@@ -135,11 +135,20 @@ export function ContactModal({ contact, isOpen, onClose, onSave, onDelete, allCo
       setNewCategory('');
     }
     
+    if (!finalFormData.id) {
+      finalFormData.id = Date.now().toString();
+    }
+    
     onSave(finalFormData);
   };
 
   const handleSubmit = (e: React.FormEvent) => {
     e.preventDefault();
+    if (!formData.name.trim()) {
+      setActiveTab('details');
+      alert('Please enter a name for the contact.');
+      return;
+    }
     handleSaveAndClose();
   };
 
@@ -345,7 +354,6 @@ export function ContactModal({ contact, isOpen, onClose, onSave, onDelete, allCo
                           <div className="space-y-1.5">
                             <label className="text-[10px] uppercase tracking-wider font-bold text-[#a8a38d]">Name</label>
                             <input
-                              required
                               type="text"
                               value={formData.name}
                               onChange={e => setFormData({ ...formData, name: e.target.value })}

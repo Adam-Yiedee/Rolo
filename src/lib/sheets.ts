@@ -76,7 +76,7 @@ export async function createSpreadsheet(token: string): Promise<string> {
     },
     body: JSON.stringify({
       properties: {
-        title: 'Rolodex Contacts',
+        title: 'Roldex Contacts',
       },
       sheets: [
         {
