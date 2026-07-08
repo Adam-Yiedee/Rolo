@@ -144,9 +144,15 @@ export default function App() {
   };
 
   const handleSaveContact = async (contact: Contact) => {
-    if (!spreadsheetId) return;
+    if (!spreadsheetId) {
+      alert("Error: Spreadsheet not connected. Please refresh or check your Google Sheets API setup.");
+      return;
+    }
     const token = await getAccessToken();
-    if (!token) return;
+    if (!token) {
+      alert("Error: Missing access token. Please sign out and sign back in.");
+      return;
+    }
 
     setLoading(true);
     try {
@@ -171,9 +177,15 @@ export default function App() {
   };
 
   const handleDeleteContact = async (id: string) => {
-    if (!spreadsheetId) return;
+    if (!spreadsheetId) {
+      alert("Error: Spreadsheet not connected.");
+      return;
+    }
     const token = await getAccessToken();
-    if (!token) return;
+    if (!token) {
+      alert("Error: Missing access token.");
+      return;
+    }
 
     setLoading(true);
     try {

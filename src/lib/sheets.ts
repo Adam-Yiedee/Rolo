@@ -25,6 +25,8 @@ export interface Contact {
   family: string;
   background?: string;
   linkedInUrl?: string;
+  email?: string;
+  phoneNumber?: string;
   lastContactDate: string; // ISO string
   reminderIntervalDays: number | null;
   lastReminderSentDate: string; // ISO string
@@ -60,7 +62,9 @@ const HEADERS = [
   'History',
   'Categories',
   'Background',
-  'LinkedIn URL'
+  'LinkedIn URL',
+  'Email',
+  'Phone Number'
 ];
 
 export async function createSpreadsheet(token: string): Promise<string> {
@@ -92,7 +96,7 @@ export async function createSpreadsheet(token: string): Promise<string> {
   const spreadsheetId = data.spreadsheetId;
   
   // Set headers
-  await fetch(`https://sheets.googleapis.com/v4/spreadsheets/${spreadsheetId}/values/${SHEET_NAME}!A1:O1?valueInputOption=USER_ENTERED`, {
+  await fetch(`https://sheets.googleapis.com/v4/spreadsheets/${spreadsheetId}/values/${SHEET_NAME}!A1:Q1?valueInputOption=USER_ENTERED`, {
     method: 'PUT',
     headers: {
       Authorization: `Bearer ${token}`,
@@ -108,7 +112,7 @@ export async function createSpreadsheet(token: string): Promise<string> {
 }
 
 export async function getContacts(token: string, spreadsheetId: string): Promise<Contact[]> {
-  const res = await fetch(`https://sheets.googleapis.com/v4/spreadsheets/${spreadsheetId}/values/${SHEET_NAME}!A2:O`, {
+  const res = await fetch(`https://sheets.googleapis.com/v4/spreadsheets/${spreadsheetId}/values/${SHEET_NAME}!A2:Q`, {
     headers: {
       Authorization: `Bearer ${token}`,
     },
@@ -151,7 +155,9 @@ export async function getContacts(token: string, spreadsheetId: string): Promise
       history,
       categories,
       background: row[13] || '',
-      linkedInUrl: row[14] || ''
+      linkedInUrl: row[14] || '',
+      email: row[15] || '',
+      phoneNumber: row[16] || ''
     };
   });
 }
@@ -159,7 +165,7 @@ export async function getContacts(token: string, spreadsheetId: string): Promise
 export async function saveContacts(token: string, spreadsheetId: string, contacts: Contact[]): Promise<void> {
   // We will clear the existing data and overwrite to make it simple.
   // First clear
-  await fetch(`https://sheets.googleapis.com/v4/spreadsheets/${spreadsheetId}/values/${SHEET_NAME}!A2:O:clear`, {
+  await fetch(`https://sheets.googleapis.com/v4/spreadsheets/${spreadsheetId}/values/${SHEET_NAME}!A2:Q:clear`, {
     method: 'POST',
     headers: {
       Authorization: `Bearer ${token}`,
@@ -183,10 +189,12 @@ export async function saveContacts(token: string, spreadsheetId: string, contact
     JSON.stringify(c.history || []),
     JSON.stringify(c.categories || []),
     c.background || '',
-    c.linkedInUrl || ''
+    c.linkedInUrl || '',
+    c.email || '',
+    c.phoneNumber || ''
   ]);
 
-  await fetch(`https://sheets.googleapis.com/v4/spreadsheets/${spreadsheetId}/values/${SHEET_NAME}!A2:O?valueInputOption=USER_ENTERED`, {
+  await fetch(`https://sheets.googleapis.com/v4/spreadsheets/${spreadsheetId}/values/${SHEET_NAME}!A2:Q?valueInputOption=USER_ENTERED`, {
     method: 'PUT',
     headers: {
       Authorization: `Bearer ${token}`,

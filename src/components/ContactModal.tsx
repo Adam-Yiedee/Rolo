@@ -1,6 +1,6 @@
 import React, { useState, useEffect, useRef } from 'react';
 import { Contact, SubContact, LinkedContact } from '../lib/sheets';
-import { X, Camera, Plus, Trash2 } from 'lucide-react';
+import { X, Camera, Plus, Trash2, Copy, Check, Mail, Phone } from 'lucide-react';
 import { resizeImage } from '../lib/image';
 import { motion, AnimatePresence } from 'motion/react';
 
@@ -93,6 +93,10 @@ export function ContactModal({ contact, isOpen, onClose, onSave, onDelete, allCo
   const [isNestedExpanded, setIsNestedExpanded] = useState(false);
   const [isLinksExpanded, setIsLinksExpanded] = useState(false);
   const [isEditingLinkedIn, setIsEditingLinkedIn] = useState(false);
+  const [isEditingEmail, setIsEditingEmail] = useState(false);
+  const [isEditingPhone, setIsEditingPhone] = useState(false);
+  const [copiedEmail, setCopiedEmail] = useState(false);
+  const [copiedPhone, setCopiedPhone] = useState(false);
 
   useEffect(() => {
     if (contact) {
@@ -110,6 +114,8 @@ export function ContactModal({ contact, isOpen, onClose, onSave, onDelete, allCo
         family: '',
         background: '',
         linkedInUrl: '',
+        email: '',
+        phoneNumber: '',
         lastContactDate: new Date().toISOString(),
         reminderIntervalDays: null,
         lastReminderSentDate: '',
@@ -479,6 +485,142 @@ export function ContactModal({ contact, isOpen, onClose, onSave, onDelete, allCo
                                   onClick={() => setIsEditingLinkedIn(true)}
                                   className="px-3 flex items-center justify-center bg-[#f4f1e6] hover:bg-[#e8e4d3] text-[#8e8a75] rounded-xl transition-colors border border-transparent hover:border-[#e0dbc5]"
                                   title="Edit Link"
+                                >
+                                  <svg xmlns="http://www.w3.org/2000/svg" width="14" height="14" viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="2.5" strokeLinecap="round" strokeLinejoin="round"><path d="M21.174 6.812a1 1 0 0 0-3.986-3.987L3.842 16.174a2 2 0 0 0-.5.83l-1.321 4.352a.5.5 0 0 0 .623.622l4.353-1.32a2 2 0 0 0 .83-.497z"/><path d="m15 5 4 4"/></svg>
+                                </button>
+                              </div>
+                            )}
+                          </div>
+                        </div>
+                      </div>
+
+                      <div className="grid grid-cols-1 md:grid-cols-2 gap-5 mt-5">
+                        <div className="space-y-1.5">
+                          <label className="text-[10px] uppercase tracking-wider font-bold text-[#a8a38d]">Email Address</label>
+                          <div className="flex gap-2 h-[42px]">
+                            {(!formData.email || isEditingEmail) ? (
+                              <div className="flex gap-2 w-full">
+                                <input
+                                  type="email"
+                                  value={formData.email || ''}
+                                  onChange={e => setFormData({ ...formData, email: e.target.value })}
+                                  onBlur={() => {
+                                    if (formData.email) setIsEditingEmail(false);
+                                  }}
+                                  onKeyDown={e => {
+                                    if (e.key === 'Enter') {
+                                      e.preventDefault();
+                                      if (formData.email) setIsEditingEmail(false);
+                                    }
+                                  }}
+                                  className="w-full px-4 py-2.5 bg-[#f4f1e6] border border-transparent rounded-xl focus:bg-white focus:border-[#e0dbc5] focus:ring-4 focus:ring-[#5a5a40]/10 transition-all duration-300 outline-none text-[#4a453e] shadow-inner focus:shadow-sm text-sm"
+                                  placeholder="hello@example.com"
+                                  autoFocus={isEditingEmail}
+                                />
+                                {formData.email && (
+                                  <button
+                                    type="button"
+                                    onClick={() => setIsEditingEmail(false)}
+                                    className="px-4 py-2.5 bg-[#5a5a40] text-white rounded-xl text-xs font-bold uppercase tracking-wider hover:bg-[#4a4a34] transition-colors"
+                                  >
+                                    Done
+                                  </button>
+                                )}
+                              </div>
+                            ) : (
+                              <div className="flex gap-2 w-full h-full">
+                                <a
+                                  href={`mailto:${formData.email}`}
+                                  className="flex-1 flex items-center justify-center gap-2 bg-[#d93025] text-white rounded-xl px-4 hover:bg-[#b3271f] hover:-translate-y-0.5 active:scale-95 transition-all shadow-sm"
+                                  title="Draft Email"
+                                >
+                                  <Mail size={16} />
+                                  <span className="font-medium text-sm text-ellipsis overflow-hidden whitespace-nowrap max-w-[120px]">{formData.email}</span>
+                                </a>
+                                <button
+                                  type="button"
+                                  onClick={() => {
+                                    navigator.clipboard.writeText(formData.email || '');
+                                    setCopiedEmail(true);
+                                    setTimeout(() => setCopiedEmail(false), 2000);
+                                  }}
+                                  className="px-3 flex items-center justify-center bg-[#f4f1e6] hover:bg-[#e8e4d3] text-[#8e8a75] rounded-xl transition-colors border border-transparent hover:border-[#e0dbc5]"
+                                  title="Copy Email"
+                                >
+                                  {copiedEmail ? <Check size={14} className="text-[#5a5a40]" /> : <Copy size={14} />}
+                                </button>
+                                <button
+                                  type="button"
+                                  onClick={() => setIsEditingEmail(true)}
+                                  className="px-3 flex items-center justify-center bg-[#f4f1e6] hover:bg-[#e8e4d3] text-[#8e8a75] rounded-xl transition-colors border border-transparent hover:border-[#e0dbc5]"
+                                  title="Edit Email"
+                                >
+                                  <svg xmlns="http://www.w3.org/2000/svg" width="14" height="14" viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="2.5" strokeLinecap="round" strokeLinejoin="round"><path d="M21.174 6.812a1 1 0 0 0-3.986-3.987L3.842 16.174a2 2 0 0 0-.5.83l-1.321 4.352a.5.5 0 0 0 .623.622l4.353-1.32a2 2 0 0 0 .83-.497z"/><path d="m15 5 4 4"/></svg>
+                                </button>
+                              </div>
+                            )}
+                          </div>
+                        </div>
+
+                        <div className="space-y-1.5">
+                          <label className="text-[10px] uppercase tracking-wider font-bold text-[#a8a38d]">Phone Number</label>
+                          <div className="flex gap-2 h-[42px]">
+                            {(!formData.phoneNumber || isEditingPhone) ? (
+                              <div className="flex gap-2 w-full">
+                                <input
+                                  type="tel"
+                                  value={formData.phoneNumber || ''}
+                                  onChange={e => setFormData({ ...formData, phoneNumber: e.target.value })}
+                                  onBlur={() => {
+                                    if (formData.phoneNumber) setIsEditingPhone(false);
+                                  }}
+                                  onKeyDown={e => {
+                                    if (e.key === 'Enter') {
+                                      e.preventDefault();
+                                      if (formData.phoneNumber) setIsEditingPhone(false);
+                                    }
+                                  }}
+                                  className="w-full px-4 py-2.5 bg-[#f4f1e6] border border-transparent rounded-xl focus:bg-white focus:border-[#e0dbc5] focus:ring-4 focus:ring-[#5a5a40]/10 transition-all duration-300 outline-none text-[#4a453e] shadow-inner focus:shadow-sm text-sm"
+                                  placeholder="+1 (555) 000-0000"
+                                  autoFocus={isEditingPhone}
+                                />
+                                {formData.phoneNumber && (
+                                  <button
+                                    type="button"
+                                    onClick={() => setIsEditingPhone(false)}
+                                    className="px-4 py-2.5 bg-[#5a5a40] text-white rounded-xl text-xs font-bold uppercase tracking-wider hover:bg-[#4a4a34] transition-colors"
+                                  >
+                                    Done
+                                  </button>
+                                )}
+                              </div>
+                            ) : (
+                              <div className="flex gap-2 w-full h-full">
+                                <a
+                                  href={`tel:${formData.phoneNumber}`}
+                                  className="flex-1 flex items-center justify-center gap-2 bg-[#f4f1e6] text-[#4a453e] border border-transparent rounded-xl px-4 hover:bg-white hover:border-[#e0dbc5] shadow-sm transition-all text-sm font-medium"
+                                  title="Call"
+                                >
+                                  <Phone size={14} className="text-[#a8a38d]" />
+                                  <span className="text-ellipsis overflow-hidden whitespace-nowrap max-w-[120px]">{formData.phoneNumber}</span>
+                                </a>
+                                <button
+                                  type="button"
+                                  onClick={() => {
+                                    navigator.clipboard.writeText(formData.phoneNumber || '');
+                                    setCopiedPhone(true);
+                                    setTimeout(() => setCopiedPhone(false), 2000);
+                                  }}
+                                  className="px-3 flex items-center justify-center bg-[#f4f1e6] hover:bg-[#e8e4d3] text-[#8e8a75] rounded-xl transition-colors border border-transparent hover:border-[#e0dbc5]"
+                                  title="Copy Phone"
+                                >
+                                  {copiedPhone ? <Check size={14} className="text-[#5a5a40]" /> : <Copy size={14} />}
+                                </button>
+                                <button
+                                  type="button"
+                                  onClick={() => setIsEditingPhone(true)}
+                                  className="px-3 flex items-center justify-center bg-[#f4f1e6] hover:bg-[#e8e4d3] text-[#8e8a75] rounded-xl transition-colors border border-transparent hover:border-[#e0dbc5]"
+                                  title="Edit Phone"
                                 >
                                   <svg xmlns="http://www.w3.org/2000/svg" width="14" height="14" viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="2.5" strokeLinecap="round" strokeLinejoin="round"><path d="M21.174 6.812a1 1 0 0 0-3.986-3.987L3.842 16.174a2 2 0 0 0-.5.83l-1.321 4.352a.5.5 0 0 0 .623.622l4.353-1.32a2 2 0 0 0 .83-.497z"/><path d="m15 5 4 4"/></svg>
                                 </button>
