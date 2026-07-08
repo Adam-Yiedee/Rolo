@@ -29,6 +29,14 @@ const getCategoryColor = (category: string) => {
   return CATEGORY_COLORS[Math.abs(hash) % CATEGORY_COLORS.length];
 };
 
+const getInitials = (name: string) => {
+  if (!name) return '?';
+  const parts = name.trim().split(/\s+/);
+  if (parts.length === 0 || !parts[0]) return '?';
+  if (parts.length === 1) return parts[0].substring(0, 2).toUpperCase();
+  return (parts[0][0] + parts[parts.length - 1][0]).toUpperCase();
+};
+
 export function ContactCard({ contact, onClick, onLogContact }: ContactCardProps) {
   const [isExpanded, setIsExpanded] = useState(false);
 
@@ -41,8 +49,14 @@ export function ContactCard({ contact, onClick, onLogContact }: ContactCardProps
     }
   }
 
+  const primaryCategory = contact.categories && contact.categories.length > 0 ? contact.categories[0] : null;
+  const avatarColorClass = primaryCategory ? getCategoryColor(primaryCategory) : 'bg-[#f4f1e6] text-[#8e8a75]';
+
   return (
-    <div className="bg-white rounded-[24px] shadow-sm border border-[#e0dbc5] flex flex-col hover:shadow-md transition-all duration-300 group">
+    <motion.div 
+      whileHover={{ y: -2, transition: { duration: 0.2, ease: 'easeOut' } }}
+      className="bg-white rounded-[24px] shadow-sm hover:shadow-md border border-[#e0dbc5] flex flex-col group"
+    >
       <div 
         className="flex items-center gap-4 p-4 cursor-pointer"
         onClick={onClick}
@@ -50,8 +64,8 @@ export function ContactCard({ contact, onClick, onLogContact }: ContactCardProps
         {contact.profilePicture ? (
           <img src={contact.profilePicture} alt={contact.name} className="w-12 h-12 rounded-full object-cover bg-[#e8e4d3] shrink-0 border border-[#e0dbc5] shadow-sm" />
         ) : (
-          <div className="w-12 h-12 rounded-full bg-[#f4f1e6] flex items-center justify-center text-[#8e8a75] shrink-0 border border-[#e0dbc5] shadow-sm">
-            <UserRound size={20} strokeWidth={1.5} />
+          <div className={`w-12 h-12 rounded-full flex items-center justify-center shrink-0 border border-[#e0dbc5] shadow-sm font-serif text-lg tracking-wide ${avatarColorClass}`}>
+            {getInitials(contact.name)}
           </div>
         )}
         
@@ -71,9 +85,11 @@ export function ContactCard({ contact, onClick, onLogContact }: ContactCardProps
             </div>
             
             <div className="flex flex-col sm:flex-row sm:items-center gap-1 sm:gap-4 mt-0.5">
-              <p className="text-[11px] text-[#8e8a75] flex items-center gap-1 font-medium tracking-wide uppercase">
-                <Clock size={10} strokeWidth={2.5} /> Last: {lastContactStr}
-              </p>
+              {contact.reminderIntervalDays && contact.reminderIntervalDays > 0 && (
+                <p className="text-[11px] text-[#8e8a75] flex items-center gap-1 font-medium tracking-wide uppercase">
+                  <Clock size={10} strokeWidth={2.5} /> Last: {lastContactStr}
+                </p>
+              )}
               {contact.interests && (
                 <p className="text-[11px] text-[#a8a38d] flex items-center gap-1 truncate max-w-xs">
                   <Heart size={10} strokeWidth={2.5} /> {contact.interests}
@@ -89,7 +105,7 @@ export function ContactCard({ contact, onClick, onLogContact }: ContactCardProps
               e.stopPropagation();
               onLogContact();
             }}
-            title="Add Interaction"
+            title="Log Interaction"
             className="w-10 h-10 rounded-full bg-[#f4f1e6] hover:bg-[#5a5a40] text-[#8e8a75] hover:text-white flex items-center justify-center transition-all duration-300 shadow-sm"
           >
             <Plus size={18} strokeWidth={2.5} />
@@ -132,10 +148,12 @@ export function ContactCard({ contact, onClick, onLogContact }: ContactCardProps
                 </div>
                 
                 <div className="space-y-4">
-                  <div>
-                    <h4 className="text-[10px] font-bold uppercase tracking-wider text-[#a8a38d] mb-1">Reminder Goal</h4>
-                    <p>{contact.reminderIntervalDays ? `Every ${contact.reminderIntervalDays} days` : 'No reminder set'}</p>
-                  </div>
+                  {contact.reminderIntervalDays && contact.reminderIntervalDays > 0 ? (
+                    <div>
+                      <h4 className="text-[10px] font-bold uppercase tracking-wider text-[#a8a38d] mb-1">Reach Out Reminder</h4>
+                      <p>Every {contact.reminderIntervalDays} days</p>
+                    </div>
+                  ) : null}
                   
                   {contact.family && (
                     <div>
@@ -149,6 +167,6 @@ export function ContactCard({ contact, onClick, onLogContact }: ContactCardProps
           </motion.div>
         )}
       </AnimatePresence>
-    </div>
+    </motion.div>
   );
 }

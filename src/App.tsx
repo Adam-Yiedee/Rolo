@@ -8,7 +8,7 @@ import { User } from 'firebase/auth';
 import { Contact, getSpreadsheetId, createSpreadsheet, getContacts, saveContacts } from './lib/sheets';
 import { sendReminderEmail } from './lib/gmail';
 import { differenceInDays, parseISO } from 'date-fns';
-import { LogOut, Plus, Search, Loader2, UserRound, LayoutGrid, Network } from 'lucide-react';
+import { LogOut, Plus, Search, Loader2, UserRound, LayoutGrid, Network, Settings, X } from 'lucide-react';
 import { motion, AnimatePresence } from 'motion/react';
 
 export default function App() {
@@ -20,15 +20,24 @@ export default function App() {
   const [contacts, setContacts] = useState<Contact[]>([]);
   const [searchTerm, setSearchTerm] = useState('');
   const [selectedCategory, setSelectedCategory] = useState<string | null>(null);
-  const [sortBy, setSortBy] = useState<'name' | 'recent' | 'goals'>('name');
-  const [viewMode, setViewMode] = useState<'grid' | 'graph'>('grid');
+  const [sortBy, setSortBy] = useState<'name' | 'recent' | 'goals' | 'categories'>('name');
+  const [isSettingsOpen, setIsSettingsOpen] = useState(false);
+  const [showGraphView, setShowGraphView] = useState(false);
+  const [isHoveringSort, setIsHoveringSort] = useState(false);
   
   const [spreadsheetId, setAppSpreadsheetId] = useState<string | null>(getSpreadsheetId());
   
   const [selectedContact, setSelectedContact] = useState<Contact | null>(null);
   const [isModalOpen, setIsModalOpen] = useState(false);
+  const [modalInitialTab, setModalInitialTab] = useState<'details' | 'history'>('details');
   
   const [loading, setLoading] = useState(false);
+
+  const openContactModal = (contact: Contact | null, tab: 'details' | 'history' = 'details') => {
+    setSelectedContact(contact);
+    setModalInitialTab(tab);
+    setIsModalOpen(true);
+  };
 
   useEffect(() => {
     const unsubscribe = initAuth(
@@ -181,36 +190,7 @@ export default function App() {
   };
 
   const handleLogInteraction = async (contact: Contact) => {
-    if (!spreadsheetId) return;
-    
-    const note = window.prompt(`Log interaction with ${contact.name}:\n(Optional) Add a note for this interaction:`);
-    if (note === null) return; // User cancelled the prompt
-    
-    const token = await getAccessToken();
-    if (!token) return;
-    
-    // Optimistic update
-    const newHistory = [
-      { id: crypto.randomUUID(), date: new Date().toISOString(), notes: note },
-      ...(contact.history || [])
-    ];
-    
-    const updatedContact = { 
-      ...contact, 
-      lastContactDate: new Date().toISOString(),
-      history: newHistory
-    };
-    
-    const newContacts = contacts.map(c => c.id === contact.id ? updatedContact : c);
-    setContacts(newContacts);
-    
-    try {
-      await saveContacts(token, spreadsheetId, newContacts);
-    } catch (err) {
-      console.error('Failed to log interaction:', err);
-      setContacts(contacts); // Revert
-      alert('Failed to log interaction. Please try again.');
-    }
+    openContactModal(contact, 'history');
   };
 
   if (isInitializing) {
@@ -271,12 +251,32 @@ export default function App() {
           
           <div className="flex items-center gap-4">
             {loading && <Loader2 className="w-5 h-5 animate-spin text-[#8e8a75]" />}
+            
+            <div className="relative flex items-center group">
+              <Search className="absolute left-3 text-[#a8a38d] z-10 pointer-events-none" size={16} />
+              <input
+                type="text"
+                placeholder="Search..."
+                value={searchTerm}
+                onChange={(e) => setSearchTerm(e.target.value)}
+                className="w-8 focus:w-48 sm:w-48 bg-transparent focus:bg-white border border-transparent focus:border-[#e0dbc5] rounded-full py-1.5 pl-9 pr-4 text-sm outline-none transition-all duration-300 placeholder-transparent focus:placeholder-[#a8a38d] shadow-none focus:shadow-sm"
+              />
+            </div>
+            
+            <button
+              onClick={() => setIsSettingsOpen(true)}
+              className="text-[#8e8a75] hover:text-[#5a5a40] transition-colors p-1"
+              title="Settings"
+            >
+              <Settings size={20} />
+            </button>
+
             {user?.photoURL && (
               <img src={user.photoURL} alt="Profile" className="w-8 h-8 rounded-full border border-[#e0dbc5]" />
             )}
             <button
               onClick={logout}
-              className="text-[#8e8a75] hover:text-[#5a5a40] transition-colors"
+              className="text-[#8e8a75] hover:text-[#5a5a40] transition-colors p-1"
               title="Sign Out"
             >
               <LogOut size={20} />
@@ -287,90 +287,60 @@ export default function App() {
 
       <main className="max-w-7xl mx-auto px-6 flex-1 w-full flex flex-col pt-8 pb-4 min-h-0">
         <div className="flex flex-col sm:flex-row sm:items-center justify-between gap-4 mb-4 shrink-0">
-          <div className="relative flex-1 max-w-md flex items-center gap-4">
-            <div className="relative flex-1">
-              <Search className="absolute left-4 top-1/2 -translate-y-1/2 text-[#a8a38d]" size={18} />
-              <input
-                type="text"
-                placeholder="Search connections, notes, interests..."
-                value={searchTerm}
-                onChange={(e) => setSearchTerm(e.target.value)}
-                className="w-full pl-12 pr-6 py-2.5 bg-[#f4f1e6] border border-transparent rounded-full text-sm focus:bg-white focus:border-[#e0dbc5] focus:ring-4 focus:ring-[#5a5a40]/10 transition-all duration-300 outline-none shadow-inner focus:shadow-sm"
-              />
-            </div>
-            {viewMode === 'grid' && (
-              <div className="flex items-center bg-[#f4f1e6] rounded-full p-1 border border-[#e0dbc5] shadow-inner relative">
-                {(['name', 'recent', 'goals'] as const).map(mode => (
-                  <button
-                    key={mode}
-                    onClick={() => setSortBy(mode)}
-                    className={`relative px-4 py-1.5 text-xs font-bold uppercase tracking-wider rounded-full transition-all duration-300 ${sortBy === mode ? 'text-[#5a5a40]' : 'text-[#a8a38d] hover:text-[#4a453e]'}`}
-                  >
-                    {sortBy === mode && (
-                      <motion.div
-                        layoutId="sortTab"
-                        className="absolute inset-0 bg-white shadow-sm rounded-full"
-                        style={{ zIndex: 0 }}
-                        transition={{ type: 'spring', bounce: 0.1, duration: 0.4 }}
-                      />
-                    )}
-                    <span className="relative z-10">{mode === 'name' ? 'A-Z' : mode === 'recent' ? 'Recent' : 'Goals'}</span>
-                  </button>
-                ))}
-              </div>
-            )}
+          <div className="flex-1 flex items-center gap-4">
+            <motion.div 
+              layout
+              className="flex items-center bg-[#f4f1e6] rounded-full p-1 border border-[#e0dbc5] shadow-inner relative overflow-hidden"
+              onMouseEnter={() => setIsHoveringSort(true)}
+              onMouseLeave={() => setIsHoveringSort(false)}
+              style={{ borderRadius: 9999 }}
+            >
+              <AnimatePresence initial={false} mode="popLayout">
+                {(['name', 'recent', 'goals', 'categories'] as const).map(mode => {
+                  if (!isHoveringSort && sortBy !== mode) return null;
+                  return (
+                    <motion.button
+                      layout
+                      initial={{ opacity: 0, scale: 0.8, width: 0 }}
+                      animate={{ opacity: 1, scale: 1, width: 'auto' }}
+                      exit={{ opacity: 0, scale: 0.8, width: 0 }}
+                      transition={{ duration: 0.2, ease: "easeOut" }}
+                      key={mode}
+                      onClick={() => setSortBy(mode)}
+                      className={`relative py-1.5 px-4 mx-0.5 text-xs font-bold uppercase tracking-wider rounded-full whitespace-nowrap overflow-hidden ${sortBy === mode ? 'text-[#5a5a40]' : 'text-[#a8a38d] hover:text-[#4a453e]'}`}
+                    >
+                      {sortBy === mode && (
+                        <motion.div
+                          layoutId="sortTab"
+                          className="absolute inset-0 bg-white shadow-sm rounded-full"
+                          style={{ zIndex: 0 }}
+                          transition={{ type: 'spring', bounce: 0.1, duration: 0.4 }}
+                        />
+                      )}
+                      <span className="relative z-10">{mode === 'name' ? 'A-Z' : mode === 'recent' ? 'Recent' : mode === 'goals' ? 'Goals' : 'Categories'}</span>
+                    </motion.button>
+                  );
+                })}
+              </AnimatePresence>
+            </motion.div>
           </div>
           <div className="flex items-center gap-3">
-            <div className="flex bg-[#f4f1e6] rounded-full p-1 border border-[#e0dbc5] shadow-inner relative">
-              <button
-                onClick={() => setViewMode('grid')}
-                className={`relative p-2 rounded-full transition-all duration-300 ${viewMode === 'grid' ? 'text-[#5a5a40]' : 'text-[#a8a38d] hover:text-[#4a453e]'}`}
-                title="List View"
-              >
-                {viewMode === 'grid' && (
-                  <motion.div
-                    layoutId="viewTab"
-                    className="absolute inset-0 bg-white shadow-sm rounded-full"
-                    style={{ zIndex: 0 }}
-                    transition={{ type: 'spring', bounce: 0.1, duration: 0.4 }}
-                  />
-                )}
-                <LayoutGrid size={18} strokeWidth={2} className="relative z-10" />
-              </button>
-              <button
-                onClick={() => setViewMode('graph')}
-                className={`relative p-2 rounded-full transition-all duration-300 ${viewMode === 'graph' ? 'text-[#5a5a40]' : 'text-[#a8a38d] hover:text-[#4a453e]'}`}
-                title="Graph View"
-              >
-                {viewMode === 'graph' && (
-                  <motion.div
-                    layoutId="viewTab"
-                    className="absolute inset-0 bg-white shadow-sm rounded-full"
-                    style={{ zIndex: 0 }}
-                    transition={{ type: 'spring', bounce: 0.1, duration: 0.4 }}
-                  />
-                )}
-                <Network size={18} strokeWidth={2} className="relative z-10" />
-              </button>
-            </div>
-            <button
-              onClick={() => {
-                setSelectedContact(null);
-                setIsModalOpen(true);
-              }}
-              className="flex items-center justify-center gap-2 px-6 py-2.5 bg-[#5a5a40] hover:bg-[#4a4a34] text-[#fbfaf5] text-sm font-medium rounded-full shadow-md hover:shadow-lg transition-all duration-300 hover:-translate-y-0.5 active:scale-95 whitespace-nowrap"
+            <motion.button
+              whileHover={{ y: -4, transition: { duration: 0.2 } }}
+              onClick={() => openContactModal(null, 'details')}
+              className="flex items-center justify-center gap-2 px-6 py-2.5 bg-[#5a5a40] hover:bg-[#4a4a34] text-[#fbfaf5] text-sm font-medium rounded-full shadow-md hover:shadow-lg transition-colors duration-300 active:scale-95 whitespace-nowrap"
             >
               <Plus size={18} />
               New Connection
-            </button>
+            </motion.button>
           </div>
         </div>
 
-        {allCategories.length > 0 && (
+        {sortBy === 'categories' && allCategories.length > 0 && (
           <div className="flex flex-wrap gap-2 mb-6 shrink-0">
             <button
               onClick={() => setSelectedCategory(null)}
-              className={`px-3 py-1 rounded-full text-[11px] font-bold tracking-wide uppercase transition-all duration-300 ${selectedCategory === null ? 'bg-[#5a5a40] text-white shadow-sm' : 'bg-transparent border border-[#e0dbc5] text-[#8e8a75] hover:bg-[#e8e4d3]'}`}
+              className={`px-3 py-1 rounded-full text-[11px] font-bold tracking-wide uppercase transition-all duration-300 hover:-translate-y-0.5 ${selectedCategory === null ? 'bg-[#5a5a40] text-white shadow-sm' : 'bg-transparent border border-[#e0dbc5] text-[#8e8a75] hover:bg-[#e8e4d3] hover:shadow-sm'}`}
             >
               All
             </button>
@@ -378,7 +348,7 @@ export default function App() {
               <button
                 key={cat}
                 onClick={() => setSelectedCategory(cat)}
-                className={`px-3 py-1 rounded-full text-[11px] font-bold tracking-wide uppercase transition-all duration-300 ${selectedCategory === cat ? 'bg-[#5a5a40] text-white shadow-sm' : 'bg-transparent border border-[#e0dbc5] text-[#8e8a75] hover:bg-[#e8e4d3]'}`}
+                className={`px-3 py-1 rounded-full text-[11px] font-bold tracking-wide uppercase transition-all duration-300 hover:-translate-y-0.5 ${selectedCategory === cat ? 'bg-[#5a5a40] text-white shadow-sm' : 'bg-transparent border border-[#e0dbc5] text-[#8e8a75] hover:bg-[#e8e4d3] hover:shadow-sm'}`}
               >
                 {cat}
               </button>
@@ -396,35 +366,30 @@ export default function App() {
               <p className="text-[#6d6858] text-sm mb-6 max-w-md mx-auto">
                 Add the people you meet to build your personal relationship manager. Rolodex will remind you to keep in touch.
               </p>
-              <button
-                onClick={() => {
-                  setSelectedContact(null);
-                  setIsModalOpen(true);
-                }}
-                className="inline-flex items-center gap-2 px-6 py-2.5 bg-white border border-[#e0dbc5] hover:bg-[#f4f1e6] text-[#4a453e] text-sm font-medium rounded-full shadow-sm hover:shadow-md transition-all duration-300 hover:-translate-y-0.5 active:scale-95"
+              <motion.button
+                whileHover={{ y: -4, transition: { duration: 0.2 } }}
+                onClick={() => openContactModal(null, 'details')}
+                className="inline-flex items-center gap-2 px-6 py-2.5 bg-white border border-[#e0dbc5] hover:bg-[#f4f1e6] text-[#4a453e] text-sm font-medium rounded-full shadow-sm hover:shadow-md transition-colors duration-300 active:scale-95"
               >
                 <Plus size={18} />
                 Add First Connection
-              </button>
+              </motion.button>
             </div>
-          ) : viewMode === 'graph' ? (
+          ) : showGraphView ? (
             <GraphView 
               contacts={contacts} 
               onNodeClick={(contact) => {
-                setSelectedContact(contact);
-                setIsModalOpen(true);
+                openContactModal(contact, 'details');
+                setShowGraphView(false);
               }}
             />
           ) : (
-            <div className="flex flex-col gap-4 overflow-y-auto pb-6 h-full content-start pr-2 custom-scrollbar">
+            <div className="flex flex-col gap-4 overflow-y-scroll pb-6 h-full content-start pr-2 custom-scrollbar">
               {filteredContacts.map(contact => (
                 <ContactCard
                   key={contact.id}
                   contact={contact}
-                  onClick={() => {
-                    setSelectedContact(contact);
-                    setIsModalOpen(true);
-                  }}
+                  onClick={() => openContactModal(contact, 'details')}
                   onLogContact={() => handleLogInteraction(contact)}
                 />
               ))}
@@ -448,24 +413,71 @@ export default function App() {
           </div>
         )}
       </main>
-
-      <footer className="shrink-0 h-12 bg-[#5a5a40] text-[#fbfaf5] px-6 flex items-center justify-between text-[11px]">
-        <div className="max-w-7xl mx-auto w-full flex items-center justify-between">
-          <div>&copy; 2024 Rolodex • Synchronized with Google Docs Storage</div>
-          <div className="flex gap-6 uppercase tracking-widest font-bold">
-            <span>{contacts.length} Connections</span>
-          </div>
-        </div>
-      </footer>
-
+      
       <ContactModal
         contact={selectedContact}
+        initialTab={modalInitialTab}
         isOpen={isModalOpen}
         onClose={() => setIsModalOpen(false)}
         onSave={handleSaveContact}
         onDelete={handleDeleteContact}
         allContacts={contacts}
       />
+
+      <AnimatePresence>
+        {isSettingsOpen && (
+          <div className="fixed inset-0 z-50 flex items-center justify-center p-4 bg-black/40 backdrop-blur-md">
+            <motion.div 
+              initial={{ opacity: 0, scale: 0.95 }}
+              animate={{ opacity: 1, scale: 1 }}
+              exit={{ opacity: 0, scale: 0.95 }}
+              transition={{ duration: 0.2 }}
+              className="bg-[#fbfaf5] rounded-[24px] shadow-2xl w-full max-w-sm overflow-hidden border border-[#e0dbc5] p-6 relative"
+            >
+              <button 
+                onClick={() => setIsSettingsOpen(false)} 
+                className="absolute top-4 right-4 text-[#8e8a75] hover:text-[#4a453e] p-1 rounded-full transition-colors"
+              >
+                <X size={20} />
+              </button>
+              
+              <h2 className="text-2xl font-serif text-[#4a453e] mb-6">Settings</h2>
+              
+              <div className="space-y-4">
+                <button
+                  onClick={() => {
+                    setIsSettingsOpen(false);
+                    setShowGraphView(true);
+                  }}
+                  className="w-full flex items-center gap-3 p-4 bg-white hover:bg-[#f4f1e6] border border-[#e0dbc5] rounded-xl transition-colors text-left"
+                >
+                  <Network className="text-[#5a5a40]" size={20} />
+                  <div>
+                    <div className="font-bold text-[#4a453e] text-sm uppercase tracking-wide">View Network Graph</div>
+                    <div className="text-xs text-[#8e8a75] mt-0.5">Visualize your connections</div>
+                  </div>
+                </button>
+                
+                {showGraphView && (
+                  <button
+                    onClick={() => {
+                      setIsSettingsOpen(false);
+                      setShowGraphView(false);
+                    }}
+                    className="w-full flex items-center gap-3 p-4 bg-white hover:bg-[#f4f1e6] border border-[#e0dbc5] rounded-xl transition-colors text-left"
+                  >
+                    <LayoutGrid className="text-[#5a5a40]" size={20} />
+                    <div>
+                      <div className="font-bold text-[#4a453e] text-sm uppercase tracking-wide">View List Layout</div>
+                      <div className="text-xs text-[#8e8a75] mt-0.5">Return to standard view</div>
+                    </div>
+                  </button>
+                )}
+              </div>
+            </motion.div>
+          </div>
+        )}
+      </AnimatePresence>
     </div>
   );
 }
