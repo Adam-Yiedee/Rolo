@@ -451,6 +451,7 @@ export function ContactModal({ contact, isOpen, onClose, onSave, onDelete, allCo
                                   type="url"
                                   value={formData.linkedInUrl || ''}
                                   onChange={e => setFormData({ ...formData, linkedInUrl: e.target.value })}
+                                  onFocus={() => setIsEditingLinkedIn(true)}
                                   onBlur={() => {
                                     if (formData.linkedInUrl) setIsEditingLinkedIn(false);
                                   }}
@@ -512,6 +513,7 @@ export function ContactModal({ contact, isOpen, onClose, onSave, onDelete, allCo
                                   type="email"
                                   value={formData.email || ''}
                                   onChange={e => setFormData({ ...formData, email: e.target.value })}
+                                  onFocus={() => setIsEditingEmail(true)}
                                   onBlur={() => {
                                     if (formData.email) setIsEditingEmail(false);
                                   }}
@@ -579,6 +581,7 @@ export function ContactModal({ contact, isOpen, onClose, onSave, onDelete, allCo
                                   type="tel"
                                   value={formData.phoneNumber || ''}
                                   onChange={e => setFormData({ ...formData, phoneNumber: e.target.value })}
+                                  onFocus={() => setIsEditingPhone(true)}
                                   onBlur={() => {
                                     if (formData.phoneNumber) setIsEditingPhone(false);
                                   }}

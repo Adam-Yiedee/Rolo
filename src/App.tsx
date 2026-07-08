@@ -430,7 +430,7 @@ export default function App() {
               />
             </div>
           ) : (
-            <div className="flex flex-col gap-4 overflow-y-scroll pb-6 h-full content-start pr-2 custom-scrollbar">
+            <div className="flex flex-col gap-4 overflow-y-scroll pb-6 pt-2 px-2 -mx-2 h-full content-start custom-scrollbar">
               {filteredContacts.map(contact => (
                 <ContactCard
                   key={contact.id}
