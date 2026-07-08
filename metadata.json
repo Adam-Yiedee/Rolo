@@ -1,0 +1,6 @@
+{
+  "name": "Rolodex",
+  "description": "A personal contacts manager that stores data in Google Sheets and sends email reminders via Gmail.",
+  "requestFramePermissions": [],
+  "majorCapabilities": ["MAJOR_CAPABILITY_SERVER_SIDE_GEMINI_API"]
+}
