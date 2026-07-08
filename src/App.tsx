@@ -3,6 +3,7 @@ import { AuthScreen } from './components/AuthScreen';
 import { ContactCard } from './components/ContactCard';
 import { ContactModal } from './components/ContactModal';
 import { GraphView } from './components/GraphView';
+import { GoalsDashboard } from './components/GoalsDashboard';
 import { initAuth, googleSignIn, logout, getAccessToken } from './lib/auth';
 import { User } from 'firebase/auth';
 import { Contact, getSpreadsheetId, createSpreadsheet, getContacts, saveContacts } from './lib/sheets';
@@ -21,9 +22,9 @@ export default function App() {
   const [searchTerm, setSearchTerm] = useState('');
   const [selectedCategory, setSelectedCategory] = useState<string | null>(null);
   const [sortBy, setSortBy] = useState<'name' | 'recent' | 'goals' | 'categories'>('name');
+  const [isHoveringSort, setIsHoveringSort] = useState(false);
   const [isSettingsOpen, setIsSettingsOpen] = useState(false);
   const [showGraphView, setShowGraphView] = useState(false);
-  const [isHoveringSort, setIsHoveringSort] = useState(false);
   
   const [spreadsheetId, setAppSpreadsheetId] = useState<string | null>(getSpreadsheetId());
   
@@ -290,7 +291,7 @@ export default function App() {
           <div className="flex-1 flex items-center gap-4">
             <motion.div 
               layout
-              className="flex items-center bg-[#f4f1e6] rounded-full p-1 border border-[#e0dbc5] shadow-inner relative overflow-hidden"
+              className="flex items-center bg-[#f4f1e6] rounded-full p-1 border border-[#e0dbc5] shadow-inner relative overflow-hidden inline-flex"
               onMouseEnter={() => setIsHoveringSort(true)}
               onMouseLeave={() => setIsHoveringSort(false)}
               style={{ borderRadius: 9999 }}
@@ -299,26 +300,31 @@ export default function App() {
                 {(['name', 'recent', 'goals', 'categories'] as const).map(mode => {
                   if (!isHoveringSort && sortBy !== mode) return null;
                   return (
-                    <motion.button
+                    <motion.div
                       layout
-                      initial={{ opacity: 0, scale: 0.8, width: 0 }}
-                      animate={{ opacity: 1, scale: 1, width: 'auto' }}
-                      exit={{ opacity: 0, scale: 0.8, width: 0 }}
+                      initial={{ opacity: 0, scale: 0.8 }}
+                      animate={{ opacity: 1, scale: 1 }}
+                      exit={{ opacity: 0, scale: 0.8 }}
                       transition={{ duration: 0.2, ease: "easeOut" }}
                       key={mode}
-                      onClick={() => setSortBy(mode)}
-                      className={`relative py-1.5 px-4 mx-0.5 text-xs font-bold uppercase tracking-wider rounded-full whitespace-nowrap overflow-hidden ${sortBy === mode ? 'text-[#5a5a40]' : 'text-[#a8a38d] hover:text-[#4a453e]'}`}
                     >
-                      {sortBy === mode && (
-                        <motion.div
-                          layoutId="sortTab"
-                          className="absolute inset-0 bg-white shadow-sm rounded-full"
-                          style={{ zIndex: 0 }}
-                          transition={{ type: 'spring', bounce: 0.1, duration: 0.4 }}
-                        />
-                      )}
-                      <span className="relative z-10">{mode === 'name' ? 'A-Z' : mode === 'recent' ? 'Recent' : mode === 'goals' ? 'Goals' : 'Categories'}</span>
-                    </motion.button>
+                      <button
+                        onClick={() => setSortBy(mode)}
+                        className={`relative py-1.5 px-4 mx-0.5 text-xs font-bold uppercase tracking-wider rounded-full whitespace-nowrap block outline-none ${sortBy === mode ? 'text-[#5a5a40]' : 'text-[#a8a38d] hover:text-[#4a453e]'}`}
+                      >
+                        {sortBy === mode && (
+                          <motion.div
+                            layoutId="sortTab"
+                            className="absolute inset-0 bg-white shadow-sm rounded-full"
+                            style={{ zIndex: 0 }}
+                            transition={{ type: 'spring', bounce: 0.2, duration: 0.5 }}
+                          />
+                        )}
+                        <span className="relative z-10">
+                          {mode === 'name' ? 'A-Z' : mode === 'recent' ? 'Recent' : mode === 'goals' ? 'Goals' : 'Categories'}
+                        </span>
+                      </button>
+                    </motion.div>
                   );
                 })}
               </AnimatePresence>
@@ -326,9 +332,10 @@ export default function App() {
           </div>
           <div className="flex items-center gap-3">
             <motion.button
-              whileHover={{ y: -4, transition: { duration: 0.2 } }}
+              whileHover={{ scale: 1.02, transition: { duration: 0.2 } }}
+              whileTap={{ scale: 0.98 }}
               onClick={() => openContactModal(null, 'details')}
-              className="flex items-center justify-center gap-2 px-6 py-2.5 bg-[#5a5a40] hover:bg-[#4a4a34] text-[#fbfaf5] text-sm font-medium rounded-full shadow-md hover:shadow-lg transition-colors duration-300 active:scale-95 whitespace-nowrap"
+              className="flex items-center justify-center gap-2 px-6 py-2.5 bg-[#5a5a40] hover:bg-[#4a4a34] text-[#fbfaf5] text-sm font-medium rounded-full shadow-md hover:shadow-lg transition-colors duration-300 whitespace-nowrap"
             >
               <Plus size={18} />
               New Connection
@@ -367,9 +374,10 @@ export default function App() {
                 Add the people you meet to build your personal relationship manager. Rolodex will remind you to keep in touch.
               </p>
               <motion.button
-                whileHover={{ y: -4, transition: { duration: 0.2 } }}
+                whileHover={{ scale: 1.02, transition: { duration: 0.2 } }}
+                whileTap={{ scale: 0.98 }}
                 onClick={() => openContactModal(null, 'details')}
-                className="inline-flex items-center gap-2 px-6 py-2.5 bg-white border border-[#e0dbc5] hover:bg-[#f4f1e6] text-[#4a453e] text-sm font-medium rounded-full shadow-sm hover:shadow-md transition-colors duration-300 active:scale-95"
+                className="inline-flex items-center gap-2 px-6 py-2.5 bg-white border border-[#e0dbc5] hover:bg-[#f4f1e6] text-[#4a453e] text-sm font-medium rounded-full shadow-sm hover:shadow-md transition-colors duration-300"
               >
                 <Plus size={18} />
                 Add First Connection
@@ -383,6 +391,14 @@ export default function App() {
                 setShowGraphView(false);
               }}
             />
+          ) : sortBy === 'goals' ? (
+            <div className="h-full pb-6">
+              <GoalsDashboard 
+                contacts={filteredContacts} 
+                onLogContact={(c) => openContactModal(c, 'history')} 
+                onClick={(c) => openContactModal(c, 'details')} 
+              />
+            </div>
           ) : (
             <div className="flex flex-col gap-4 overflow-y-scroll pb-6 h-full content-start pr-2 custom-scrollbar">
               {filteredContacts.map(contact => (

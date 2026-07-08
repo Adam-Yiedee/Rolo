@@ -4,6 +4,33 @@ import { X, Camera, Plus, Trash2 } from 'lucide-react';
 import { resizeImage } from '../lib/image';
 import { motion, AnimatePresence } from 'motion/react';
 
+function AutoResizeTextarea(props: React.TextareaHTMLAttributes<HTMLTextAreaElement>) {
+  const textareaRef = useRef<HTMLTextAreaElement>(null);
+
+  const resize = () => {
+    if (textareaRef.current) {
+      textareaRef.current.style.height = 'auto';
+      textareaRef.current.style.height = `${textareaRef.current.scrollHeight}px`;
+    }
+  };
+
+  useEffect(() => {
+    resize();
+  }, [props.value]);
+
+  return (
+    <textarea
+      {...props}
+      ref={textareaRef}
+      onChange={(e) => {
+        if (props.onChange) props.onChange(e);
+        resize();
+      }}
+      className={`${props.className} overflow-hidden`}
+    />
+  );
+}
+
 const CATEGORY_COLORS = [
   'bg-[#e8e4d3] text-[#5a5a40]',
   'bg-[#e6f0e6] text-[#4a634a]',
@@ -293,17 +320,15 @@ export function ContactModal({ contact, isOpen, onClose, onSave, onDelete, allCo
                       className="space-y-10"
                     >
                     <div className="space-y-6">
-                      <div className="flex gap-5 items-start">
-                        <div className="shrink-0 flex flex-col items-center gap-3">
-                          <div className={`w-32 h-32 rounded-full shadow-inner overflow-hidden flex flex-col items-center justify-center border border-[#e0dbc5] group relative cursor-pointer ${!formData.profilePicture ? avatarColorClass : 'bg-[#f4f1e6]'}`} onClick={() => fileInputRef.current?.click()}>
+                      <div className="flex flex-col sm:flex-row gap-5 items-start">
+                        <div className="shrink-0 flex flex-col items-center gap-3 w-full sm:w-auto">
+                          <div className={`w-32 h-32 mx-auto rounded-full shadow-inner overflow-hidden flex flex-col items-center justify-center border border-[#e0dbc5] group relative cursor-pointer ${!formData.profilePicture ? avatarColorClass : 'bg-[#f4f1e6]'}`} onClick={() => fileInputRef.current?.click()}>
                             {formData.profilePicture ? (
-                              <img src={formData.profilePicture} alt="Avatar" className="w-full h-full object-cover group-hover:scale-110 group-hover:blur-sm transition-all duration-500" />
+                              <img src={formData.profilePicture} alt="Avatar" className="w-full h-full object-cover group-hover:scale-110 transition-all duration-500" />
                             ) : (
-                              <>
-                                <span className="text-5xl font-serif tracking-wide group-hover:blur-sm transition-all duration-500">{getInitials(formData.name)}</span>
-                              </>
+                              <span className="text-5xl font-serif tracking-wide transition-all duration-500 group-hover:opacity-0 group-hover:scale-95">{getInitials(formData.name)}</span>
                             )}
-                            <div className="absolute inset-0 bg-black/20 opacity-0 group-hover:opacity-100 transition-opacity duration-300 flex items-center justify-center">
+                            <div className="absolute inset-0 bg-black/20 opacity-0 group-hover:opacity-100 transition-opacity duration-300 flex items-center justify-center backdrop-blur-[2px]">
                               <Camera className="text-white" size={28} />
                             </div>
                           </div>
@@ -371,7 +396,7 @@ export function ContactModal({ contact, isOpen, onClose, onSave, onDelete, allCo
 
                       <div className="space-y-1.5">
                         <label className="text-[10px] uppercase tracking-wider font-bold text-[#a8a38d]">Notes (Appearance, context, etc)</label>
-                        <textarea
+                        <AutoResizeTextarea
                           rows={3}
                           value={formData.notes}
                           onChange={e => setFormData({ ...formData, notes: e.target.value })}
@@ -382,7 +407,7 @@ export function ContactModal({ contact, isOpen, onClose, onSave, onDelete, allCo
                       
                       <div className="space-y-1.5">
                         <label className="text-[10px] uppercase tracking-wider font-bold text-[#a8a38d]">Background (Education, Work History)</label>
-                        <textarea
+                        <AutoResizeTextarea
                           rows={2}
                           value={formData.background || ''}
                           onChange={e => setFormData({ ...formData, background: e.target.value })}
@@ -412,6 +437,9 @@ export function ContactModal({ contact, isOpen, onClose, onSave, onDelete, allCo
                                   type="url"
                                   value={formData.linkedInUrl || ''}
                                   onChange={e => setFormData({ ...formData, linkedInUrl: e.target.value })}
+                                  onBlur={() => {
+                                    if (formData.linkedInUrl) setIsEditingLinkedIn(false);
+                                  }}
                                   onKeyDown={e => {
                                     if (e.key === 'Enter') {
                                       e.preventDefault();
@@ -534,7 +562,7 @@ export function ContactModal({ contact, isOpen, onClose, onSave, onDelete, allCo
                                           placeholder="Relationship (e.g. Brother, Sister)"
                                           className="w-full px-4 py-2 bg-[#f4f1e6] border border-transparent focus:bg-white focus:border-[#e0dbc5] rounded-xl text-sm outline-none transition-all text-[#4a453e]"
                                         />
-                                        <textarea
+                                        <AutoResizeTextarea
                                           value={sub.notes}
                                           onChange={e => updateSubContact(i, 'notes', e.target.value)}
                                           placeholder="Notes (e.g. 4th grade, loves animals)"
@@ -670,18 +698,16 @@ export function ContactModal({ contact, isOpen, onClose, onSave, onDelete, allCo
                       </div>
 
                       {contact && onDelete && (
-                        <div className="pt-8 mt-4 border-t border-[#f0eee0]">
+                        <div className="pt-8 mt-4 border-t border-[#f0eee0] flex justify-center">
                           <button
                             type="button"
                             onClick={() => {
-                              if (window.confirm(`Are you sure you want to delete ${contact.name}?`)) {
-                                onDelete(contact.id);
-                              }
+                              onDelete(contact.id);
                             }}
-                            className="w-full py-3 px-4 bg-white hover:bg-[#fff0ed] text-[#e67e5a] border border-[#e67e5a]/30 hover:border-[#e67e5a] font-bold rounded-xl transition-all flex items-center justify-center gap-2"
+                            className="p-3 text-[#d5d1c5] hover:text-[#e67e5a] hover:bg-[#fff0ed] rounded-full transition-all duration-300 hover:scale-110 active:scale-95"
+                            title="Delete Contact"
                           >
-                            <Trash2 size={18} />
-                            Delete Contact
+                            <Trash2 size={24} strokeWidth={1.5} />
                           </button>
                         </div>
                       )}
@@ -708,7 +734,7 @@ export function ContactModal({ contact, isOpen, onClose, onSave, onDelete, allCo
                           className="bg-white border border-[#e0dbc5] rounded-xl px-3 py-1.5 text-xs text-[#4a453e] font-medium outline-none"
                         />
                       </div>
-                      <textarea
+                      <AutoResizeTextarea
                         value={newInteractionNotes}
                         onChange={(e) => setNewInteractionNotes(e.target.value)}
                         placeholder="What did you talk about?"
@@ -747,7 +773,7 @@ export function ContactModal({ contact, isOpen, onClose, onSave, onDelete, allCo
                                 <Trash2 size={16} />
                               </button>
                             </div>
-                            <textarea
+                            <AutoResizeTextarea
                               value={hist.notes}
                               onChange={e => updateHistory(i, e.target.value)}
                               placeholder="What did you talk about?"
