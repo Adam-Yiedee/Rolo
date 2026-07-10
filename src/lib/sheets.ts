@@ -3,6 +3,11 @@ import {
   ReminderEmailTemplate,
   normalizeReminderEmailTemplate,
 } from './reminderEmail';
+import {
+  DEFAULT_REMINDER_TASK_TEMPLATE,
+  ReminderTaskTemplate,
+  normalizeReminderTaskTemplate,
+} from './googleTasks';
 
 export interface LinkedContact {
   id: string;
@@ -38,6 +43,11 @@ export interface Contact {
   lastReminderSentDate: string; // ISO string
   oneTimeReminderDate?: string; // ISO string
   oneTimeReminderCreatedDate?: string; // ISO string
+  oneTimeReminderReason?: string;
+  reminderTaskId?: string;
+  reminderTaskListId?: string;
+  reminderTaskDueDate?: string; // ISO string
+  reminderTaskWebViewLink?: string;
   linkedContacts: LinkedContact[];
   subContacts: SubContact[];
   history: ContactHistoryEntry[];
@@ -54,14 +64,20 @@ export interface SpreadsheetCandidate {
 
 export interface AppSettings {
   reminderEmailTemplate: ReminderEmailTemplate;
+  reminderTasksEnabled: boolean;
+  reminderTaskTemplate: ReminderTaskTemplate;
+  reminderTaskListId?: string;
 }
 
 const SPREADSHEET_TITLE = 'Roldex Contacts';
 const STORAGE_KEY = 'rolodex_spreadsheet_id';
 const SHEET_NAME = 'Contacts';
 const SETTINGS_SHEET_NAME = 'Settings';
-const DEFAULT_APP_SETTINGS: AppSettings = {
+export const DEFAULT_APP_SETTINGS: AppSettings = {
   reminderEmailTemplate: DEFAULT_REMINDER_EMAIL_TEMPLATE,
+  reminderTasksEnabled: false,
+  reminderTaskTemplate: DEFAULT_REMINDER_TASK_TEMPLATE,
+  reminderTaskListId: '',
 };
 
 const getStorageKey = (ownerId?: string | null): string => {
@@ -102,7 +118,12 @@ const HEADERS = [
   'Email',
   'Phone Number',
   'One-Time Reminder Date',
-  'One-Time Reminder Created Date'
+  'One-Time Reminder Created Date',
+  'One-Time Reminder Reason',
+  'Google Reminder Task ID',
+  'Google Reminder Task List ID',
+  'Google Reminder Task Due Date',
+  'Google Reminder Task Link'
 ];
 
 async function getGoogleApiError(res: Response, fallback: string): Promise<Error> {
@@ -122,7 +143,7 @@ async function getGoogleApiError(res: Response, fallback: string): Promise<Error
 }
 
 async function ensureContactHeaders(token: string, spreadsheetId: string): Promise<void> {
-  const headerRes = await fetch(`https://sheets.googleapis.com/v4/spreadsheets/${spreadsheetId}/values/${SHEET_NAME}!A1:S1?valueInputOption=USER_ENTERED`, {
+  const headerRes = await fetch(`https://sheets.googleapis.com/v4/spreadsheets/${spreadsheetId}/values/${SHEET_NAME}!A1:X1?valueInputOption=USER_ENTERED`, {
     method: 'PUT',
     headers: {
       Authorization: `Bearer ${token}`,
@@ -240,7 +261,7 @@ export async function findSpreadsheetCandidates(token: string): Promise<Spreadsh
 }
 
 export async function getContacts(token: string, spreadsheetId: string): Promise<Contact[]> {
-  const res = await fetch(`https://sheets.googleapis.com/v4/spreadsheets/${spreadsheetId}/values/${SHEET_NAME}!A2:S`, {
+  const res = await fetch(`https://sheets.googleapis.com/v4/spreadsheets/${spreadsheetId}/values/${SHEET_NAME}!A2:X`, {
     headers: {
       Authorization: `Bearer ${token}`,
     },
@@ -287,7 +308,12 @@ export async function getContacts(token: string, spreadsheetId: string): Promise
       email: row[15] || '',
       phoneNumber: row[16] || '',
       oneTimeReminderDate: row[17] || '',
-      oneTimeReminderCreatedDate: row[18] || ''
+      oneTimeReminderCreatedDate: row[18] || '',
+      oneTimeReminderReason: row[19] || '',
+      reminderTaskId: row[20] || '',
+      reminderTaskListId: row[21] || '',
+      reminderTaskDueDate: row[22] || '',
+      reminderTaskWebViewLink: row[23] || ''
     };
   });
 }
@@ -297,7 +323,7 @@ export async function saveContacts(token: string, spreadsheetId: string, contact
 
   // We will clear the existing data and overwrite to make it simple.
   // First clear
-  const clearRes = await fetch(`https://sheets.googleapis.com/v4/spreadsheets/${spreadsheetId}/values/${SHEET_NAME}!A2:S:clear`, {
+  const clearRes = await fetch(`https://sheets.googleapis.com/v4/spreadsheets/${spreadsheetId}/values/${SHEET_NAME}!A2:X:clear`, {
     method: 'POST',
     headers: {
       Authorization: `Bearer ${token}`,
@@ -329,10 +355,15 @@ export async function saveContacts(token: string, spreadsheetId: string, contact
     c.email || '',
     c.phoneNumber || '',
     c.oneTimeReminderDate || '',
-    c.oneTimeReminderCreatedDate || ''
+    c.oneTimeReminderCreatedDate || '',
+    c.oneTimeReminderReason || '',
+    c.reminderTaskId || '',
+    c.reminderTaskListId || '',
+    c.reminderTaskDueDate || '',
+    c.reminderTaskWebViewLink || ''
   ]);
 
-  const saveRes = await fetch(`https://sheets.googleapis.com/v4/spreadsheets/${spreadsheetId}/values/${SHEET_NAME}!A2:S?valueInputOption=USER_ENTERED`, {
+  const saveRes = await fetch(`https://sheets.googleapis.com/v4/spreadsheets/${spreadsheetId}/values/${SHEET_NAME}!A2:X?valueInputOption=USER_ENTERED`, {
     method: 'PUT',
     headers: {
       Authorization: `Bearer ${token}`,
@@ -404,7 +435,11 @@ export async function getAppSettings(token: string, spreadsheetId: string): Prom
   const rows = (data.values || []) as string[][];
   const settingsByKey = new Map(rows.map((row) => [row[0], row[1]]));
   const reminderTemplateValue = settingsByKey.get('reminderEmailTemplate');
+  const reminderTasksEnabledValue = settingsByKey.get('reminderTasksEnabled');
+  const reminderTaskTemplateValue = settingsByKey.get('reminderTaskTemplate');
+  const reminderTaskListId = settingsByKey.get('reminderTaskListId') || '';
   let reminderEmailTemplate = DEFAULT_REMINDER_EMAIL_TEMPLATE;
+  let reminderTaskTemplate = DEFAULT_REMINDER_TASK_TEMPLATE;
 
   if (reminderTemplateValue) {
     try {
@@ -414,8 +449,19 @@ export async function getAppSettings(token: string, spreadsheetId: string): Prom
     }
   }
 
+  if (reminderTaskTemplateValue) {
+    try {
+      reminderTaskTemplate = normalizeReminderTaskTemplate(JSON.parse(reminderTaskTemplateValue));
+    } catch (err) {
+      console.warn('Failed to parse reminder task template setting:', err);
+    }
+  }
+
   return {
     reminderEmailTemplate,
+    reminderTasksEnabled: reminderTasksEnabledValue === 'true',
+    reminderTaskTemplate,
+    reminderTaskListId,
   };
 }
 
@@ -443,6 +489,9 @@ export async function saveAppSettings(token: string, spreadsheetId: string, sett
       values: [
         ['Key', 'Value'],
         ['reminderEmailTemplate', JSON.stringify(normalizeReminderEmailTemplate(settings.reminderEmailTemplate))],
+        ['reminderTasksEnabled', settings.reminderTasksEnabled ? 'true' : 'false'],
+        ['reminderTaskTemplate', JSON.stringify(normalizeReminderTaskTemplate(settings.reminderTaskTemplate))],
+        ['reminderTaskListId', settings.reminderTaskListId || ''],
       ],
     }),
   });

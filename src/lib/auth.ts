@@ -9,6 +9,7 @@ const provider = new GoogleAuthProvider();
 provider.addScope('https://www.googleapis.com/auth/spreadsheets');
 provider.addScope('https://www.googleapis.com/auth/gmail.send');
 provider.addScope('https://www.googleapis.com/auth/drive.metadata.readonly');
+provider.addScope('https://www.googleapis.com/auth/tasks');
 provider.setCustomParameters({
   prompt: 'consent',
 });

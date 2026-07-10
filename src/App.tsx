@@ -6,11 +6,23 @@ import { GraphView } from './components/GraphView';
 import { GoalsDashboard } from './components/GoalsDashboard';
 import { initAuth, googleSignIn, logout, getAccessToken } from './lib/auth';
 import { User } from 'firebase/auth';
-import { Contact, getSpreadsheetId, createSpreadsheet, getContacts, saveContacts, findExistingSpreadsheet, findSpreadsheetCandidates, setSpreadsheetId, clearSpreadsheetId, getAppSettings, saveAppSettings } from './lib/sheets';
+import { AppSettings, Contact, DEFAULT_APP_SETTINGS, getSpreadsheetId, createSpreadsheet, getContacts, saveContacts, findExistingSpreadsheet, findSpreadsheetCandidates, setSpreadsheetId, clearSpreadsheetId, getAppSettings, saveAppSettings } from './lib/sheets';
 import { sendReminderEmail } from './lib/gmail';
 import { DEFAULT_REMINDER_EMAIL_TEMPLATE, ReminderEmailTemplate, normalizeReminderEmailTemplate, renderReminderEmailTemplate } from './lib/reminderEmail';
+import {
+  createGoogleReminderTask,
+  DEFAULT_REMINDER_TASK_TEMPLATE,
+  deleteGoogleReminderTask,
+  getGoogleTaskDueValue,
+  getOrCreateRoldexTaskList,
+  GoogleTaskNotFoundError,
+  patchGoogleReminderTask,
+  ReminderTaskTemplate,
+  normalizeReminderTaskTemplate,
+  renderReminderTaskTemplate,
+} from './lib/googleTasks';
 import { addDays, differenceInDays, parseISO } from 'date-fns';
-import { Bug, Copy, LogOut, Mail, Plus, RotateCcw, Save, Search, Send, Loader2, UserRound, LayoutGrid, Network, Settings, X } from 'lucide-react';
+import { Bug, Copy, ListTodo, LogOut, Mail, Plus, RotateCcw, Save, Search, Send, Loader2, UserRound, LayoutGrid, Network, Settings, X } from 'lucide-react';
 import { motion, AnimatePresence } from 'motion/react';
 
 export default function App() {
@@ -34,6 +46,12 @@ export default function App() {
   const [emailSettingsMessage, setEmailSettingsMessage] = useState('');
   const [isSavingEmailTemplate, setIsSavingEmailTemplate] = useState(false);
   const [isSendingTestReminder, setIsSendingTestReminder] = useState(false);
+  const [isTaskSettingsOpen, setIsTaskSettingsOpen] = useState(false);
+  const [reminderTasksEnabled, setReminderTasksEnabled] = useState(DEFAULT_APP_SETTINGS.reminderTasksEnabled);
+  const [reminderTaskTemplate, setReminderTaskTemplate] = useState<ReminderTaskTemplate>(DEFAULT_REMINDER_TASK_TEMPLATE);
+  const [reminderTaskListId, setReminderTaskListId] = useState(DEFAULT_APP_SETTINGS.reminderTaskListId || '');
+  const [taskSettingsMessage, setTaskSettingsMessage] = useState('');
+  const [isSavingTaskSettings, setIsSavingTaskSettings] = useState(false);
   
   const [spreadsheetId, setAppSpreadsheetId] = useState<string | null>(null);
   
@@ -62,6 +80,9 @@ export default function App() {
         setNeedsAuth(true);
         setIsInitializing(false);
         setReminderEmailTemplate(DEFAULT_REMINDER_EMAIL_TEMPLATE);
+        setReminderTasksEnabled(DEFAULT_APP_SETTINGS.reminderTasksEnabled);
+        setReminderTaskTemplate(DEFAULT_REMINDER_TASK_TEMPLATE);
+        setReminderTaskListId(DEFAULT_APP_SETTINGS.reminderTaskListId || '');
       }
     );
     return () => unsubscribe();
@@ -94,6 +115,7 @@ export default function App() {
       let currentSpreadsheetId = getSpreadsheetId(ownerId);
       let loadedContacts: Contact[] | null = null;
       let loadedReminderEmailTemplate = DEFAULT_REMINDER_EMAIL_TEMPLATE;
+      let loadedAppSettings = DEFAULT_APP_SETTINGS;
 
       if (currentSpreadsheetId) {
         try {
@@ -128,15 +150,37 @@ export default function App() {
 
       try {
         const appSettings = await getAppSettings(token, currentSpreadsheetId);
+        loadedAppSettings = appSettings;
         loadedReminderEmailTemplate = appSettings.reminderEmailTemplate;
         setReminderEmailTemplate(loadedReminderEmailTemplate);
+        setReminderTasksEnabled(appSettings.reminderTasksEnabled);
+        setReminderTaskTemplate(appSettings.reminderTaskTemplate);
+        setReminderTaskListId(appSettings.reminderTaskListId || '');
       } catch (err) {
         console.warn('Failed to load app settings, using defaults:', err);
         setReminderEmailTemplate(DEFAULT_REMINDER_EMAIL_TEMPLATE);
+        setReminderTasksEnabled(DEFAULT_APP_SETTINGS.reminderTasksEnabled);
+        setReminderTaskTemplate(DEFAULT_REMINDER_TASK_TEMPLATE);
+        setReminderTaskListId(DEFAULT_APP_SETTINGS.reminderTaskListId || '');
       }
       
       if (!loadedContacts) {
         loadedContacts = await getContacts(token, currentSpreadsheetId);
+      }
+
+      try {
+        const taskSyncResult = await syncGoogleReminderTasks(token, loadedContacts, loadedAppSettings);
+        if (taskSyncResult.contactsChanged) {
+          loadedContacts = taskSyncResult.contacts;
+          await saveContacts(token, currentSpreadsheetId, loadedContacts);
+        }
+        if (taskSyncResult.settingsChanged) {
+          loadedAppSettings = taskSyncResult.settings;
+          setReminderTaskListId(loadedAppSettings.reminderTaskListId || '');
+          await saveAppSettings(token, currentSpreadsheetId, loadedAppSettings);
+        }
+      } catch (err) {
+        console.warn('Failed to sync Google Tasks reminders:', err);
       }
 
       setContacts(loadedContacts);
@@ -175,6 +219,157 @@ export default function App() {
     const dueDate = getContactReminderDueDate(contact);
     if (!dueDate) return -9999;
     return differenceInDays(new Date(), dueDate);
+  };
+
+  const hasStoredReminderTask = (contact: Contact) => Boolean(
+    contact.reminderTaskId
+    || contact.reminderTaskListId
+    || contact.reminderTaskDueDate
+    || contact.reminderTaskWebViewLink,
+  );
+
+  const clearReminderTaskFields = (contact: Contact): Contact => ({
+    ...contact,
+    reminderTaskId: '',
+    reminderTaskListId: '',
+    reminderTaskDueDate: '',
+    reminderTaskWebViewLink: '',
+  });
+
+  const getCurrentAppSettings = (): AppSettings => ({
+    reminderEmailTemplate: normalizeReminderEmailTemplate(reminderEmailTemplate),
+    reminderTasksEnabled,
+    reminderTaskTemplate: normalizeReminderTaskTemplate(reminderTaskTemplate),
+    reminderTaskListId,
+  });
+
+  const getReminderTaskPayload = (contact: Contact, dueDate: Date, template: ReminderTaskTemplate) => {
+    const lastContact = parseContactDate(contact.lastContactDate);
+    const daysSinceContact = lastContact ? Math.max(0, differenceInDays(new Date(), lastContact)) : undefined;
+    const dueIso = dueDate.toISOString();
+    const due = getGoogleTaskDueValue(dueDate);
+    const rendered = renderReminderTaskTemplate(template, {
+      contactName: contact.name,
+      lastContactDate: contact.lastContactDate,
+      daysSinceContact,
+      reminderIntervalDays: contact.reminderIntervalDays,
+      dueDate: dueIso,
+      reason: contact.oneTimeReminderReason,
+    });
+
+    return {
+      title: rendered.title,
+      notes: rendered.notes,
+      due,
+    };
+  };
+
+  const syncGoogleReminderTasks = async (
+    token: string,
+    sourceContacts: Contact[],
+    sourceSettings: AppSettings,
+    deletedContacts: Contact[] = [],
+  ) => {
+    let contactsChanged = false;
+    let settingsChanged = false;
+    const updatedContacts = [...sourceContacts];
+    const settings: AppSettings = {
+      ...sourceSettings,
+      reminderEmailTemplate: normalizeReminderEmailTemplate(sourceSettings.reminderEmailTemplate),
+      reminderTaskTemplate: normalizeReminderTaskTemplate(sourceSettings.reminderTaskTemplate),
+      reminderTaskListId: sourceSettings.reminderTaskListId || '',
+    };
+
+    const clearTaskForContact = async (contact: Contact) => {
+      if (contact.reminderTaskId || contact.reminderTaskListId) {
+        await deleteGoogleReminderTask(token, contact.reminderTaskListId || settings.reminderTaskListId, contact.reminderTaskId);
+      }
+    };
+
+    for (const deletedContact of deletedContacts) {
+      await clearTaskForContact(deletedContact);
+    }
+
+    if (!settings.reminderTasksEnabled) {
+      for (let i = 0; i < updatedContacts.length; i++) {
+        const contact = updatedContacts[i];
+        if (!hasStoredReminderTask(contact)) continue;
+        await clearTaskForContact(contact);
+        updatedContacts[i] = clearReminderTaskFields(contact);
+        contactsChanged = true;
+      }
+
+      return { contacts: updatedContacts, settings, contactsChanged, settingsChanged };
+    }
+
+    const taskListId = await getOrCreateRoldexTaskList(token, settings.reminderTaskListId);
+    if (settings.reminderTaskListId !== taskListId) {
+      settings.reminderTaskListId = taskListId;
+      settingsChanged = true;
+    }
+
+    for (let i = 0; i < updatedContacts.length; i++) {
+      let contact = updatedContacts[i];
+      const dueDate = getContactReminderDueDate(contact);
+
+      if (!dueDate) {
+        if (hasStoredReminderTask(contact)) {
+          await clearTaskForContact(contact);
+          updatedContacts[i] = clearReminderTaskFields(contact);
+          contactsChanged = true;
+        }
+        continue;
+      }
+
+      if (contact.reminderTaskId && contact.reminderTaskListId && contact.reminderTaskListId !== taskListId) {
+        await deleteGoogleReminderTask(token, contact.reminderTaskListId, contact.reminderTaskId);
+        contact = clearReminderTaskFields(contact);
+      }
+
+      const payload = getReminderTaskPayload(contact, dueDate, settings.reminderTaskTemplate);
+      const shouldReopenTask = Boolean(contact.reminderTaskDueDate && contact.reminderTaskDueDate !== payload.due);
+      let syncedTask;
+
+      if (contact.reminderTaskId) {
+        try {
+          syncedTask = await patchGoogleReminderTask(token, taskListId, contact.reminderTaskId, {
+            ...payload,
+            ...(shouldReopenTask ? { status: 'needsAction' } : {}),
+          });
+        } catch (err) {
+          if (!(err instanceof GoogleTaskNotFoundError)) throw err;
+          syncedTask = await createGoogleReminderTask(token, taskListId, {
+            ...payload,
+            status: 'needsAction',
+          });
+        }
+      } else {
+        syncedTask = await createGoogleReminderTask(token, taskListId, {
+          ...payload,
+          status: 'needsAction',
+        });
+      }
+
+      const nextContact = {
+        ...contact,
+        reminderTaskId: syncedTask.id,
+        reminderTaskListId: taskListId,
+        reminderTaskDueDate: payload.due,
+        reminderTaskWebViewLink: syncedTask.webViewLink || contact.reminderTaskWebViewLink || '',
+      };
+
+      if (
+        nextContact.reminderTaskId !== updatedContacts[i].reminderTaskId
+        || nextContact.reminderTaskListId !== updatedContacts[i].reminderTaskListId
+        || nextContact.reminderTaskDueDate !== updatedContacts[i].reminderTaskDueDate
+        || nextContact.reminderTaskWebViewLink !== updatedContacts[i].reminderTaskWebViewLink
+      ) {
+        updatedContacts[i] = nextContact;
+        contactsChanged = true;
+      }
+    }
+
+    return { contacts: updatedContacts, settings, contactsChanged, settingsChanged };
   };
 
   const processReminders = async (
@@ -218,6 +413,7 @@ export default function App() {
             daysSinceContact,
             reminderIntervalDays: contact.reminderIntervalDays,
             dueDate: dueDate.toISOString(),
+            reason: contact.oneTimeReminderReason,
           });
           updatedContacts[i] = { ...contact, lastReminderSentDate: now.toISOString() };
           needsSave = true;
@@ -253,6 +449,20 @@ export default function App() {
       } else {
         newContacts = [...contacts, contact];
       }
+
+      try {
+        const taskSyncResult = await syncGoogleReminderTasks(token, newContacts, getCurrentAppSettings());
+        newContacts = taskSyncResult.contacts;
+        if (taskSyncResult.settingsChanged) {
+          setReminderTaskListId(taskSyncResult.settings.reminderTaskListId || '');
+          await saveAppSettings(token, spreadsheetId, taskSyncResult.settings);
+        }
+      } catch (err: any) {
+        console.error('Failed to sync Google Tasks reminder:', err);
+        if (reminderTasksEnabled || contact.reminderTaskId) {
+          alert(`Contact saved, but Google Tasks sync failed. If you just enabled tasks, sign out and back in so Google grants the new Tasks permission. Error: ${err.message || String(err)}`);
+        }
+      }
       
       await saveContacts(token, spreadsheetId, newContacts);
       setContacts(newContacts);
@@ -279,9 +489,26 @@ export default function App() {
 
     setLoading(true);
     try {
+      const contactToDelete = contacts.find(c => c.id === id);
       const newContacts = contacts.filter(c => c.id !== id);
-      await saveContacts(token, spreadsheetId, newContacts);
-      setContacts(newContacts);
+      let contactsToSave = newContacts;
+      try {
+        const taskSyncResult = await syncGoogleReminderTasks(
+          token,
+          newContacts,
+          getCurrentAppSettings(),
+          contactToDelete ? [contactToDelete] : [],
+        );
+        contactsToSave = taskSyncResult.contacts;
+        if (taskSyncResult.settingsChanged) {
+          setReminderTaskListId(taskSyncResult.settings.reminderTaskListId || '');
+          await saveAppSettings(token, spreadsheetId, taskSyncResult.settings);
+        }
+      } catch (err) {
+        console.error('Failed to remove Google reminder task for deleted contact:', err);
+      }
+      await saveContacts(token, spreadsheetId, contactsToSave);
+      setContacts(contactsToSave);
       setIsModalOpen(false);
       setSelectedContact(null);
     } catch (err) {
@@ -326,6 +553,7 @@ export default function App() {
         add('Token info status', tokenInfoRes.status);
         add('Token scopes', tokenInfo.scope || tokenInfo.error_description || tokenInfo.error || 'missing');
         add('Gmail send scope present', Boolean(tokenInfo.scope?.includes('https://www.googleapis.com/auth/gmail.send')));
+        add('Google Tasks scope present', Boolean(tokenInfo.scope?.includes('https://www.googleapis.com/auth/tasks')));
       } catch (err: any) {
         add('Token info error', err.message || String(err));
       }
@@ -382,8 +610,12 @@ export default function App() {
     setEmailSettingsMessage('');
 
     try {
-      await saveAppSettings(token, spreadsheetId, {
+      const nextSettings = {
+        ...getCurrentAppSettings(),
         reminderEmailTemplate: normalizedTemplate,
+      };
+      await saveAppSettings(token, spreadsheetId, {
+        ...nextSettings,
       });
       setReminderEmailTemplate(normalizedTemplate);
       setEmailSettingsMessage('Reminder email saved.');
@@ -418,6 +650,7 @@ export default function App() {
         daysSinceContact: 3,
         reminderIntervalDays: 5,
         dueDate,
+        reason: 'Follow up about job interview',
       });
       setEmailSettingsMessage(`Test reminder sent to ${user.email}.`);
     } catch (err: any) {
@@ -425,6 +658,68 @@ export default function App() {
       setEmailSettingsMessage(err.message || 'Failed to send test reminder.');
     } finally {
       setIsSendingTestReminder(false);
+    }
+  };
+
+  const saveReminderTaskSettings = async () => {
+    if (!spreadsheetId) {
+      setTaskSettingsMessage('Spreadsheet is not connected yet.');
+      return;
+    }
+
+    const token = await getAccessToken();
+    if (!token) {
+      setTaskSettingsMessage('Missing Google access token. Sign out and back in to save.');
+      return;
+    }
+
+    const normalizedTemplate = normalizeReminderTaskTemplate(reminderTaskTemplate);
+    let nextSettings: AppSettings = {
+      ...getCurrentAppSettings(),
+      reminderTasksEnabled,
+      reminderTaskTemplate: normalizedTemplate,
+    };
+    let contactsToSave = contacts;
+    let contactsChanged = false;
+    let syncError: unknown = null;
+
+    setIsSavingTaskSettings(true);
+    setTaskSettingsMessage('');
+
+    try {
+      try {
+        const taskSyncResult = await syncGoogleReminderTasks(token, contacts, nextSettings);
+        nextSettings = taskSyncResult.settings;
+        contactsToSave = taskSyncResult.contacts;
+        contactsChanged = taskSyncResult.contactsChanged;
+      } catch (err) {
+        syncError = err;
+        console.error('Failed to sync Google Tasks while saving settings:', err);
+      }
+
+      await saveAppSettings(token, spreadsheetId, nextSettings);
+      if (contactsChanged) {
+        await saveContacts(token, spreadsheetId, contactsToSave);
+        setContacts(contactsToSave);
+      }
+
+      setReminderTasksEnabled(nextSettings.reminderTasksEnabled);
+      setReminderTaskTemplate(nextSettings.reminderTaskTemplate);
+      setReminderTaskListId(nextSettings.reminderTaskListId || '');
+
+      if (syncError) {
+        const message = syncError instanceof Error ? syncError.message : String(syncError);
+        setTaskSettingsMessage(`Task settings saved, but Google Tasks sync failed. Sign out and back in if this is the first time enabling tasks. ${message}`);
+      } else {
+        setTaskSettingsMessage(nextSettings.reminderTasksEnabled
+          ? 'Google Tasks reminders saved and synced.'
+          : 'Google Tasks reminders turned off.');
+      }
+    } catch (err: any) {
+      console.error('Failed to save Google Tasks settings:', err);
+      setTaskSettingsMessage(err.message || 'Failed to save Google Tasks settings.');
+    } finally {
+      setIsSavingTaskSettings(false);
     }
   };
 
@@ -477,6 +772,15 @@ export default function App() {
     daysSinceContact: 3,
     reminderIntervalDays: 5,
     dueDate: addDays(new Date(), 2).toISOString(),
+    reason: 'Follow up about job interview',
+  });
+  const reminderTaskPreview = renderReminderTaskTemplate(reminderTaskTemplate, {
+    contactName: 'Test Contact',
+    lastContactDate: addDays(new Date(), -3).toISOString(),
+    daysSinceContact: 3,
+    reminderIntervalDays: 5,
+    dueDate: addDays(new Date(), 2).toISOString(),
+    reason: 'Follow up about job interview',
   });
 
   return (
@@ -783,7 +1087,7 @@ export default function App() {
                         </div>
 
                         <div className="flex flex-wrap gap-2">
-                          {['{name}', '{daysSinceContact}', '{dueDate}', '{lastContactDate}'].map((token) => (
+                          {['{name}', '{daysSinceContact}', '{dueDate}', '{lastContactDate}', '{reason}'].map((token) => (
                             <button
                               key={token}
                               type="button"
@@ -840,6 +1144,130 @@ export default function App() {
                           <div className="text-[10px] uppercase tracking-wider font-bold text-[#a8a38d] mb-2">Preview</div>
                           <div className="text-sm font-semibold text-[#4a453e] break-words">{reminderEmailPreview.subject}</div>
                           <div className="mt-2 max-h-28 overflow-auto whitespace-pre-wrap text-xs leading-relaxed text-[#6d6858] break-words custom-scrollbar">{reminderEmailPreview.body}</div>
+                        </div>
+                      </div>
+                    </motion.div>
+                  )}
+                </AnimatePresence>
+
+                <button
+                  onClick={() => {
+                    setIsTaskSettingsOpen(!isTaskSettingsOpen);
+                    setTaskSettingsMessage('');
+                  }}
+                  className="w-full flex items-center gap-3 p-4 bg-white hover:bg-[#f4f1e6] border border-[#e0dbc5] rounded-xl transition-colors text-left"
+                >
+                  <ListTodo className="text-[#5a5a40]" size={20} />
+                  <div className="flex-1">
+                    <div className="font-bold text-[#4a453e] text-sm uppercase tracking-wide">Google Tasks</div>
+                    <div className="text-xs text-[#8e8a75] mt-0.5">Create tasks for due contact reminders</div>
+                  </div>
+                  <span className={`text-[10px] font-bold uppercase tracking-wider ${reminderTasksEnabled ? 'text-[#5a5a40]' : 'text-[#a8a38d]'}`}>
+                    {reminderTasksEnabled ? 'On' : 'Off'}
+                  </span>
+                </button>
+
+                <AnimatePresence initial={false}>
+                  {isTaskSettingsOpen && (
+                    <motion.div
+                      initial={{ opacity: 0, height: 0 }}
+                      animate={{ opacity: 1, height: 'auto' }}
+                      exit={{ opacity: 0, height: 0 }}
+                      transition={{ duration: 0.2 }}
+                      className="overflow-hidden"
+                    >
+                      <div className="space-y-4 rounded-xl border border-[#e0dbc5] bg-white p-4">
+                        <div className="flex items-center justify-between gap-3">
+                          <div>
+                            <div className="text-[10px] uppercase tracking-wider font-bold text-[#a8a38d]">Create Google Tasks</div>
+                            <div className="text-xs text-[#8e8a75] mt-0.5">Uses a Roldex list in Google Tasks.</div>
+                          </div>
+                          <button
+                            type="button"
+                            onClick={() => setReminderTasksEnabled(!reminderTasksEnabled)}
+                            className={`relative h-7 w-12 rounded-full border transition-colors ${reminderTasksEnabled ? 'bg-[#5a5a40] border-[#5a5a40]' : 'bg-[#f4f1e6] border-[#e0dbc5]'}`}
+                            aria-pressed={reminderTasksEnabled}
+                          >
+                            <motion.span
+                              className="absolute top-1 h-5 w-5 rounded-full bg-white shadow-sm"
+                              animate={{ left: reminderTasksEnabled ? 22 : 4 }}
+                              transition={{ type: 'spring', stiffness: 420, damping: 30 }}
+                            />
+                          </button>
+                        </div>
+
+                        <div className={`space-y-4 ${reminderTasksEnabled ? '' : 'opacity-60'}`}>
+                          <div className="space-y-1.5">
+                            <label className="text-[10px] uppercase tracking-wider font-bold text-[#a8a38d]">Title</label>
+                            <input
+                              type="text"
+                              value={reminderTaskTemplate.title}
+                              onChange={(e) => setReminderTaskTemplate({ ...reminderTaskTemplate, title: e.target.value })}
+                              disabled={!reminderTasksEnabled}
+                              className="w-full px-3 py-2 bg-[#f4f1e6] border border-transparent rounded-xl focus:bg-white focus:border-[#e0dbc5] focus:ring-4 focus:ring-[#5a5a40]/10 transition-all outline-none text-sm text-[#4a453e] disabled:cursor-not-allowed"
+                            />
+                          </div>
+
+                          <div className="space-y-1.5">
+                            <label className="text-[10px] uppercase tracking-wider font-bold text-[#a8a38d]">Details</label>
+                            <textarea
+                              value={reminderTaskTemplate.notes}
+                              onChange={(e) => setReminderTaskTemplate({ ...reminderTaskTemplate, notes: e.target.value })}
+                              disabled={!reminderTasksEnabled}
+                              rows={4}
+                              className="w-full px-3 py-2 bg-[#f4f1e6] border border-transparent rounded-xl focus:bg-white focus:border-[#e0dbc5] focus:ring-4 focus:ring-[#5a5a40]/10 transition-all outline-none text-sm text-[#4a453e] resize-y min-h-24 disabled:cursor-not-allowed"
+                            />
+                          </div>
+
+                          <div className="flex flex-wrap gap-2">
+                            {['{name}', '{dueDate}', '{lastContactDate}', '{daysSinceContact}', '{reason}'].map((token) => (
+                              <button
+                                key={token}
+                                type="button"
+                                disabled={!reminderTasksEnabled}
+                                onClick={() => setReminderTaskTemplate({
+                                  ...reminderTaskTemplate,
+                                  notes: `${reminderTaskTemplate.notes}${reminderTaskTemplate.notes.endsWith(' ') || reminderTaskTemplate.notes.endsWith('\n') ? '' : ' '}${token}`,
+                                })}
+                                className="rounded-full border border-[#e0dbc5] bg-[#fbfaf5] px-2.5 py-1 text-[11px] font-medium text-[#6d6858] hover:bg-[#f4f1e6] disabled:opacity-60 disabled:cursor-not-allowed transition-colors"
+                              >
+                                {token}
+                              </button>
+                            ))}
+                          </div>
+                        </div>
+
+                        {taskSettingsMessage && (
+                          <p className="rounded-xl bg-[#f4f1e6] px-3 py-2 text-xs text-[#6d6858]">{taskSettingsMessage}</p>
+                        )}
+
+                        <div className="flex flex-wrap items-center justify-between gap-2">
+                          <button
+                            type="button"
+                            onClick={() => {
+                              setReminderTaskTemplate(DEFAULT_REMINDER_TASK_TEMPLATE);
+                              setTaskSettingsMessage('Default Google Task text restored. Save to keep it.');
+                            }}
+                            className="inline-flex items-center gap-2 px-3 py-2 text-xs font-bold uppercase tracking-wider text-[#6d6858] hover:bg-[#f4f1e6] rounded-full transition-colors"
+                          >
+                            <RotateCcw size={14} /> Reset
+                          </button>
+
+                          <button
+                            type="button"
+                            onClick={saveReminderTaskSettings}
+                            disabled={isSavingTaskSettings}
+                            className="inline-flex items-center gap-2 px-4 py-2 rounded-full bg-[#5a5a40] text-[#fbfaf5] text-xs font-bold uppercase tracking-wider hover:bg-[#4a4a34] disabled:opacity-60 disabled:cursor-not-allowed transition-colors"
+                          >
+                            {isSavingTaskSettings ? <Loader2 size={14} className="animate-spin" /> : <Save size={14} />}
+                            Save
+                          </button>
+                        </div>
+
+                        <div className="rounded-xl border border-[#e0dbc5] bg-[#fbfaf5] p-3">
+                          <div className="text-[10px] uppercase tracking-wider font-bold text-[#a8a38d] mb-2">Preview</div>
+                          <div className="text-sm font-semibold text-[#4a453e] break-words">{reminderTaskPreview.title}</div>
+                          <div className="mt-2 max-h-24 overflow-auto whitespace-pre-wrap text-xs leading-relaxed text-[#6d6858] break-words custom-scrollbar">{reminderTaskPreview.notes}</div>
                         </div>
                       </div>
                     </motion.div>

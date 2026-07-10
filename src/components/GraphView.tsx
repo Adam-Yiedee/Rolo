@@ -25,6 +25,82 @@ const getCategoryColorHex = (category: string) => {
   return CATEGORY_COLORS[Math.abs(hash) % CATEGORY_COLORS.length];
 };
 
+type GraphNode = Contact & {
+  radius: number;
+  x?: number;
+  y?: number;
+  vx?: number;
+  vy?: number;
+  fx?: number | null;
+  fy?: number | null;
+};
+
+type ContactLink = {
+  source: string;
+  target: string;
+  label: string;
+};
+
+type CategoryLink = {
+  source: string;
+  target: string;
+  sharedCategories: number;
+};
+
+type CategorySpreadPair = {
+  source: GraphNode;
+  target: GraphNode;
+};
+
+const getContactPairKey = (firstId: string, secondId: string) => {
+  return [firstId, secondId].sort().join('::');
+};
+
+const getSharedCategoryCount = (first: Contact, second: Contact) => {
+  const firstCategories = new Set((first.categories || []).filter(Boolean));
+  if (firstCategories.size === 0) return 0;
+
+  return (second.categories || []).filter((category) => firstCategories.has(category)).length;
+};
+
+const bothContactsHaveCategories = (first: Contact, second: Contact) => {
+  return (first.categories || []).length > 0 && (second.categories || []).length > 0;
+};
+
+const createUnlikeCategorySpreadForce = (pairs: CategorySpreadPair[]) => {
+  const targetDistance = 250;
+  const strength = 0.018;
+
+  return (alpha: number) => {
+    pairs.forEach(({ source, target }) => {
+      const sourceX = source.x || 0;
+      const sourceY = source.y || 0;
+      const targetX = target.x || 0;
+      const targetY = target.y || 0;
+      let dx = targetX - sourceX;
+      let dy = targetY - sourceY;
+      let distance = Math.sqrt(dx * dx + dy * dy);
+
+      if (distance === 0) {
+        dx = (Math.random() - 0.5) * 0.01;
+        dy = (Math.random() - 0.5) * 0.01;
+        distance = Math.sqrt(dx * dx + dy * dy);
+      }
+
+      if (distance >= targetDistance) return;
+
+      const push = ((targetDistance - distance) / distance) * strength * alpha;
+      const x = dx * push;
+      const y = dy * push;
+
+      source.vx = (source.vx || 0) - x;
+      source.vy = (source.vy || 0) - y;
+      target.vx = (target.vx || 0) + x;
+      target.vy = (target.vy || 0) + y;
+    });
+  };
+};
+
 export function GraphView({ contacts, onNodeClick }: GraphViewProps) {
   const containerRef = useRef<HTMLDivElement>(null);
 
@@ -37,23 +113,60 @@ export function GraphView({ contacts, onNodeClick }: GraphViewProps) {
     // Clear previous graph
     d3.select(containerRef.current).selectAll('*').remove();
 
-    const nodes = contacts.map(c => ({ ...c, radius: 20 }));
-    const links: any[] = [];
+    const nodes: GraphNode[] = contacts.map(c => ({ ...c, radius: 20 }));
+    const nodesById = new Map(nodes.map(node => [node.id, node]));
+    const links: ContactLink[] = [];
+    const categoryLinks: CategoryLink[] = [];
+    const categorySpreadPairs: CategorySpreadPair[] = [];
+    const linkedPairKeys = new Set<string>();
 
     contacts.forEach(source => {
       source.linkedContacts.forEach(link => {
         const target = contacts.find(c => c.id === link.id);
         if (target) {
           links.push({ source: source.id, target: target.id, label: link.relation });
+          linkedPairKeys.add(getContactPairKey(source.id, target.id));
         }
       });
     });
 
+    for (let i = 0; i < contacts.length; i++) {
+      for (let j = i + 1; j < contacts.length; j++) {
+        const source = contacts[i];
+        const target = contacts[j];
+        const sharedCategories = getSharedCategoryCount(source, target);
+        if (linkedPairKeys.has(getContactPairKey(source.id, target.id))) continue;
+
+        if (sharedCategories === 0) {
+          const sourceNode = nodesById.get(source.id);
+          const targetNode = nodesById.get(target.id);
+          if (sourceNode && targetNode && bothContactsHaveCategories(source, target)) {
+            categorySpreadPairs.push({
+              source: sourceNode,
+              target: targetNode,
+            });
+          }
+          continue;
+        }
+
+        categoryLinks.push({
+          source: source.id,
+          target: target.id,
+          sharedCategories,
+        });
+      }
+    }
+
     const simulation = d3.forceSimulation(nodes as any)
-      .force('link', d3.forceLink(links).id((d: any) => d.id).distance(150))
-      .force('charge', d3.forceManyBody().strength(-300))
+      .velocityDecay(0.34)
+      .force('link', d3.forceLink(links).id((d: any) => d.id).distance(115).strength(0.68))
+      .force('category', d3.forceLink(categoryLinks).id((d: any) => d.id).distance(130).strength((d: any) => Math.min(0.22, 0.13 + d.sharedCategories * 0.035)))
+      .force('unlikeCategorySpread', createUnlikeCategorySpreadForce(categorySpreadPairs))
+      .force('charge', d3.forceManyBody().strength(-280).distanceMax(460))
       .force('center', d3.forceCenter(width / 2, height / 2))
-      .force('collide', d3.forceCollide().radius(30));
+      .force('x', d3.forceX(width / 2).strength(0.025))
+      .force('y', d3.forceY(height / 2).strength(0.025))
+      .force('collide', d3.forceCollide().radius((d: any) => d.radius + 28).strength(0.95));
 
     const svg = d3.select(containerRef.current)
       .append('svg')

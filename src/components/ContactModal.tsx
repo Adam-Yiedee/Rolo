@@ -172,6 +172,7 @@ export function ContactModal({ contact, isOpen, onClose, onSave, onDelete, allCo
     lastReminderSentDate: '',
     oneTimeReminderDate: '',
     oneTimeReminderCreatedDate: '',
+    oneTimeReminderReason: '',
     linkedContacts: [],
     subContacts: [],
     history: [],
@@ -198,7 +199,8 @@ export function ContactModal({ contact, isOpen, onClose, onSave, onDelete, allCo
         ...contact,
         categories: contact.categories || [],
         oneTimeReminderDate: contact.oneTimeReminderDate || '',
-        oneTimeReminderCreatedDate: contact.oneTimeReminderCreatedDate || ''
+        oneTimeReminderCreatedDate: contact.oneTimeReminderCreatedDate || '',
+        oneTimeReminderReason: contact.oneTimeReminderReason || ''
       });
     } else {
       setFormData({
@@ -217,6 +219,7 @@ export function ContactModal({ contact, isOpen, onClose, onSave, onDelete, allCo
         lastReminderSentDate: '',
         oneTimeReminderDate: '',
         oneTimeReminderCreatedDate: '',
+        oneTimeReminderReason: '',
         linkedContacts: [],
         subContacts: [],
         history: [],
@@ -232,6 +235,9 @@ export function ContactModal({ contact, isOpen, onClose, onSave, onDelete, allCo
       finalFormData.categories = [...(finalFormData.categories || []), newCategory.trim()];
       setNewCategory('');
     }
+    finalFormData.oneTimeReminderReason = finalFormData.oneTimeReminderDate
+      ? (finalFormData.oneTimeReminderReason || '').trim()
+      : '';
     
     if (!finalFormData.id) {
       finalFormData.id = Date.now().toString();
@@ -319,6 +325,7 @@ export function ContactModal({ contact, isOpen, onClose, onSave, onDelete, allCo
       ...formData,
       oneTimeReminderDate: '',
       oneTimeReminderCreatedDate: '',
+      oneTimeReminderReason: '',
       lastReminderSentDate: '',
     } : formData;
     const updatedFormData = syncLastContactDateFromHistory(reminderClearedFormData, [
@@ -340,6 +347,7 @@ export function ContactModal({ contact, isOpen, onClose, onSave, onDelete, allCo
     : formData.reminderIntervalDays && formData.reminderIntervalDays > 0
       ? 'recurring'
       : 'none';
+  const reminderModeIndex = reminderMode === 'none' ? 0 : reminderMode === 'recurring' ? 1 : 2;
   const oneTimeReminderInputValue = formData.oneTimeReminderDate
     ? getHistoryDateInputValue(formData.oneTimeReminderDate)
     : getDaysFromNowDate(3);
@@ -559,7 +567,14 @@ export function ContactModal({ contact, isOpen, onClose, onSave, onDelete, allCo
                       <div className="grid grid-cols-1 md:grid-cols-2 gap-5">
                         <div className="space-y-1.5">
                           <label className="text-[10px] uppercase tracking-wider font-bold text-[#a8a38d]">Contact Reminder</label>
-                          <div className="flex bg-[#f4f1e6] rounded-xl p-1 border border-[#e0dbc5] shadow-inner">
+                          <div className="relative flex bg-[#f4f1e6] rounded-xl p-1 border border-[#e0dbc5] shadow-inner overflow-hidden">
+                            <motion.span
+                              aria-hidden="true"
+                              className="pointer-events-none absolute inset-y-1 left-1 z-0 rounded-lg bg-white shadow-sm"
+                              style={{ width: 'calc((100% - 0.5rem) / 3)' }}
+                              animate={{ x: `${reminderModeIndex * 100}%` }}
+                              transition={{ type: 'spring', stiffness: 430, damping: 36 }}
+                            />
                             {[
                               { id: 'none', label: 'None' },
                               { id: 'recurring', label: 'Every' },
@@ -575,6 +590,7 @@ export function ContactModal({ contact, isOpen, onClose, onSave, onDelete, allCo
                                       reminderIntervalDays: null,
                                       oneTimeReminderDate: '',
                                       oneTimeReminderCreatedDate: '',
+                                      oneTimeReminderReason: '',
                                       lastReminderSentDate: '',
                                     });
                                   } else if (option.id === 'recurring') {
@@ -583,6 +599,7 @@ export function ContactModal({ contact, isOpen, onClose, onSave, onDelete, allCo
                                       reminderIntervalDays: formData.reminderIntervalDays || 30,
                                       oneTimeReminderDate: '',
                                       oneTimeReminderCreatedDate: '',
+                                      oneTimeReminderReason: '',
                                       lastReminderSentDate: '',
                                     });
                                   } else {
@@ -595,7 +612,7 @@ export function ContactModal({ contact, isOpen, onClose, onSave, onDelete, allCo
                                     });
                                   }
                                 }}
-                                className={`flex-1 rounded-lg px-2 py-1.5 text-[10px] font-bold uppercase tracking-wider transition-colors ${reminderMode === option.id ? 'bg-white text-[#5a5a40] shadow-sm' : 'text-[#8e8a75] hover:text-[#4a453e]'}`}
+                                className={`relative z-10 flex-1 rounded-lg px-2 py-1.5 text-[10px] font-bold uppercase tracking-wider transition-colors ${reminderMode === option.id ? 'text-[#5a5a40]' : 'text-[#8e8a75] hover:text-[#4a453e]'}`}
                               >
                                 {option.label}
                               </button>
@@ -613,6 +630,7 @@ export function ContactModal({ contact, isOpen, onClose, onSave, onDelete, allCo
                                   reminderIntervalDays: e.target.value ? parseInt(e.target.value, 10) : null,
                                   oneTimeReminderDate: '',
                                   oneTimeReminderCreatedDate: '',
+                                  oneTimeReminderReason: '',
                                   lastReminderSentDate: '',
                                 })}
                                 className="w-full px-4 py-2.5 bg-[#f4f1e6] border border-transparent rounded-xl focus:bg-white focus:border-[#e0dbc5] focus:ring-4 focus:ring-[#5a5a40]/10 transition-all duration-300 outline-none text-[#4a453e] shadow-inner focus:shadow-sm text-sm"
@@ -655,6 +673,16 @@ export function ContactModal({ contact, isOpen, onClose, onSave, onDelete, allCo
                                 style={{ '--slider-progress': oneTimeReminderSliderProgress } as React.CSSProperties}
                                 aria-label="One-time reminder days"
                               />
+                              <div className="space-y-1">
+                                <label className="text-[10px] uppercase tracking-wider font-bold text-[#a8a38d]">Reason (optional)</label>
+                                <input
+                                  type="text"
+                                  value={formData.oneTimeReminderReason || ''}
+                                  onChange={(e) => setFormData({ ...formData, oneTimeReminderReason: e.target.value })}
+                                  className="w-full px-3 py-2 bg-[#fbfaf5] border border-[#e0dbc5] rounded-xl focus:bg-white focus:border-[#d4ccb0] focus:ring-4 focus:ring-[#5a5a40]/10 transition-all outline-none text-sm text-[#4a453e]"
+                                  placeholder="Follow up about job interview"
+                                />
+                              </div>
                             </div>
                           )}
                         </div>
@@ -1093,10 +1121,9 @@ export function ContactModal({ contact, isOpen, onClose, onSave, onDelete, allCo
                     transition={{ duration: 0.2 }}
                     className="space-y-6"
                   >
-                    <div className="bg-[#f4f1e6] p-5 rounded-2xl border border-[#e0dbc5] space-y-4">
-                      <div className="flex items-center justify-between">
-                        <h3 className="text-[11px] uppercase tracking-wider font-bold text-[#a8a38d]">Log Contact</h3>
-                      </div>
+                    <div className="space-y-3">
+                      <h3 className="text-lg font-serif text-[#4a453e] leading-tight">Log Contact</h3>
+                      <div className="bg-[#f4f1e6] p-5 rounded-2xl border border-[#e0dbc5] space-y-4">
                       <div className="bg-white border border-[#e0dbc5] rounded-2xl p-4 space-y-3 shadow-sm">
                         <div className="flex items-center justify-between gap-3">
                           <div>
@@ -1141,6 +1168,7 @@ export function ContactModal({ contact, isOpen, onClose, onSave, onDelete, allCo
                           <Plus size={14} /> Log Contact
                         </button>
                       </div>
+                    </div>
                     </div>
 
                     <h3 className="text-[11px] uppercase tracking-wider font-bold text-[#a8a38d] mt-8 mb-4">Past Interactions</h3>

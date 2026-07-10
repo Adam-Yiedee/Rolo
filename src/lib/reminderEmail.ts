@@ -9,6 +9,7 @@ export interface ReminderEmailContext {
   daysSinceContact?: number;
   reminderIntervalDays?: number | null;
   dueDate?: string;
+  reason?: string;
 }
 
 export const DEFAULT_REMINDER_EMAIL_TEMPLATE: ReminderEmailTemplate = {
@@ -56,6 +57,7 @@ export const renderReminderEmailTemplate = (
     reminderIntervalDays: typeof context.reminderIntervalDays === 'number' ? String(context.reminderIntervalDays) : '',
     lastContactDate: formatDateForEmail(context.lastContactDate),
     dueDate: formatDateForEmail(context.dueDate),
+    reason: context.reason?.trim() || '',
   };
 
   const render = (value: string) => value.replace(/\{([a-zA-Z][a-zA-Z0-9]*)\}/g, (match, key) => {
