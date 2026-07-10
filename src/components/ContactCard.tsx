@@ -94,14 +94,14 @@ export function ContactCard({ contact, onClick, onLogContact }: ContactCardProps
             </div>
             
             <div className="flex flex-col sm:flex-row sm:items-center gap-1 sm:gap-4 mt-0.5">
-              {(hasOneTimeReminder || (contact.reminderIntervalDays && contact.reminderIntervalDays > 0)) && (
-                <p className="text-[11px] text-[#8e8a75] flex items-center gap-1 font-medium tracking-wide uppercase">
-                  <Clock size={10} strokeWidth={2.5} /> {hasOneTimeReminder ? `Once: ${oneTimeReminderStr}` : `Last: ${lastContactStr}`}
-                </p>
-              )}
               {contact.interests && (
                 <p className="text-[11px] text-[#a8a38d] flex items-center gap-1 truncate max-w-xs">
                   <Heart size={10} strokeWidth={2.5} /> {contact.interests}
+                </p>
+              )}
+              {(hasOneTimeReminder || (contact.reminderIntervalDays && contact.reminderIntervalDays > 0)) && (
+                <p className="text-[11px] text-[#8e8a75] flex items-center gap-1 font-medium tracking-wide uppercase">
+                  <Clock size={10} strokeWidth={2.5} /> {hasOneTimeReminder ? `Once: ${oneTimeReminderStr}` : `Last: ${lastContactStr}`}
                 </p>
               )}
             </div>
