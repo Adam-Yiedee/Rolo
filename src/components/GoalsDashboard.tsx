@@ -1,7 +1,21 @@
-import React from 'react';
+import React, { useMemo, useState } from 'react';
 import { Contact } from '../lib/sheets';
-import { formatDistanceToNow, parseISO, addDays, format, differenceInDays } from 'date-fns';
-import { Plus, Clock, Mail } from 'lucide-react';
+import {
+  addDays,
+  addMonths,
+  differenceInDays,
+  eachDayOfInterval,
+  endOfMonth,
+  endOfWeek,
+  format,
+  isSameDay,
+  isSameMonth,
+  isToday,
+  parseISO,
+  startOfMonth,
+  startOfWeek,
+} from 'date-fns';
+import { CalendarDays, ChevronLeft, ChevronRight, Clock, List, Plus } from 'lucide-react';
 import { motion } from 'motion/react';
 
 interface GoalsDashboardProps {
@@ -18,22 +32,124 @@ const getInitials = (name: string) => {
   return (parts[0][0] + parts[parts.length - 1][0]).toUpperCase();
 };
 
+const getShortName = (name: string) => {
+  return name.trim().split(/\s+/)[0] || name;
+};
+
+const interpolate = (start: number, end: number, amount: number) => {
+  return Math.round(start + (end - start) * amount);
+};
+
+const colorToRgb = (hex: string) => {
+  const normalized = hex.replace('#', '');
+  return {
+    r: parseInt(normalized.substring(0, 2), 16),
+    g: parseInt(normalized.substring(2, 4), 16),
+    b: parseInt(normalized.substring(4, 6), 16),
+  };
+};
+
+const mixHex = (startHex: string, endHex: string, amount: number) => {
+  const start = colorToRgb(startHex);
+  const end = colorToRgb(endHex);
+  const r = interpolate(start.r, end.r, amount).toString(16).padStart(2, '0');
+  const g = interpolate(start.g, end.g, amount).toString(16).padStart(2, '0');
+  const b = interpolate(start.b, end.b, amount).toString(16).padStart(2, '0');
+  return `#${r}${g}${b}`;
+};
+
 export function GoalsDashboard({ contacts, onLogContact, onClick }: GoalsDashboardProps) {
+  const [viewMode, setViewMode] = useState<'list' | 'schedule'>('list');
+  const [visibleMonth, setVisibleMonth] = useState(() => startOfMonth(new Date()));
+
+  const parseContactDate = (value?: string) => {
+    if (!value) return null;
+    const date = parseISO(value);
+    return Number.isNaN(date.getTime()) ? null : date;
+  };
+
   const getNextContactDate = (c: Contact) => {
-    if (!c.lastContactDate || !c.reminderIntervalDays) return new Date();
-    return addDays(parseISO(c.lastContactDate), c.reminderIntervalDays);
+    const oneTimeReminderDate = parseContactDate(c.oneTimeReminderDate);
+    if (oneTimeReminderDate) return oneTimeReminderDate;
+
+    const lastContactDate = parseContactDate(c.lastContactDate);
+    if (!lastContactDate || !c.reminderIntervalDays) return new Date();
+    return addDays(lastContactDate, c.reminderIntervalDays);
+  };
+
+  const getGoalProgress = (contact: Contact) => {
+    const oneTimeReminderDate = parseContactDate(contact.oneTimeReminderDate);
+    if (oneTimeReminderDate) {
+      const createdDate = parseContactDate(contact.oneTimeReminderCreatedDate) || parseContactDate(contact.lastContactDate) || new Date();
+      const totalDays = Math.max(1, differenceInDays(oneTimeReminderDate, createdDate));
+      const elapsedDays = Math.max(0, differenceInDays(new Date(), createdDate));
+      return Math.min(elapsedDays / totalDays, 1);
+    }
+
+    if (!contact.lastContactDate || !contact.reminderIntervalDays) return 1;
+    const lastContact = parseContactDate(contact.lastContactDate);
+    if (!lastContact) return 1;
+    const daysSinceLastContact = Math.max(0, differenceInDays(new Date(), lastContact));
+    return Math.min(daysSinceLastContact / contact.reminderIntervalDays, 1);
+  };
+
+  const getGoalColor = (contact: Contact) => {
+    const progress = Math.pow(getGoalProgress(contact), 0.55);
+    const tint = mixHex('#e4eee0', '#f2d2c8', progress);
+    const border = mixHex('#cad8bf', '#de8d76', progress);
+    const text = mixHex('#536b4d', '#a5533f', progress);
+
+    return {
+      backgroundColor: tint,
+      borderColor: border,
+      color: text,
+      progress,
+    };
+  };
+
+  const getDueText = (daysUntil: number) => {
+    if (daysUntil < 0) {
+      const daysOverdue = Math.abs(daysUntil);
+      return `${daysOverdue} day${daysOverdue === 1 ? '' : 's'} overdue`;
+    }
+    if (daysUntil === 0) return 'Due today';
+    if (daysUntil === 1) return 'Tomorrow';
+    return `${daysUntil} days`;
   };
 
   const sortedContacts = [...contacts].sort((a, b) => {
     return getNextContactDate(a).getTime() - getNextContactDate(b).getTime();
   });
 
+  const calendarDays = useMemo(() => {
+    return eachDayOfInterval({
+      start: startOfWeek(startOfMonth(visibleMonth)),
+      end: endOfWeek(endOfMonth(visibleMonth)),
+    });
+  }, [visibleMonth]);
+
   return (
-    <div className="bg-white rounded-[32px] shadow-sm border border-[#e0dbc5] p-6 sm:p-8 flex flex-col h-full overflow-hidden">
-      <div className="flex flex-col sm:flex-row sm:items-center justify-between mb-8 shrink-0 gap-4">
+    <div className="bg-white rounded-[32px] shadow-sm border border-[#e0dbc5] p-5 sm:p-7 flex flex-col h-full overflow-hidden">
+      <div className="flex flex-col sm:flex-row sm:items-center justify-between mb-6 shrink-0 gap-4">
         <div>
           <h2 className="text-xl font-serif text-[#4a453e] mb-1">Contact Goals</h2>
           <p className="text-sm text-[#8e8a75]">Stay in touch with your most important connections.</p>
+        </div>
+        <div className="flex items-center bg-[#f4f1e6] rounded-full p-1 border border-[#e0dbc5] shadow-inner self-start sm:self-auto">
+          <button
+            onClick={() => setViewMode('list')}
+            className={`w-10 h-9 rounded-full flex items-center justify-center transition-colors ${viewMode === 'list' ? 'bg-white text-[#5a5a40] shadow-sm' : 'text-[#8e8a75] hover:text-[#4a453e]'}`}
+            title="List view"
+          >
+            <List size={16} />
+          </button>
+          <button
+            onClick={() => setViewMode('schedule')}
+            className={`w-10 h-9 rounded-full flex items-center justify-center transition-colors ${viewMode === 'schedule' ? 'bg-white text-[#5a5a40] shadow-sm' : 'text-[#8e8a75] hover:text-[#4a453e]'}`}
+            title="Schedule view"
+          >
+            <CalendarDays size={16} />
+          </button>
         </div>
       </div>
 
@@ -41,7 +157,80 @@ export function GoalsDashboard({ contacts, onLogContact, onClick }: GoalsDashboa
         <div className="flex-1 flex flex-col items-center justify-center text-center">
           <Clock className="text-[#d0cdc1] mb-4" size={32} />
           <h3 className="text-[#4a453e] font-bold">No Goals Set</h3>
-          <p className="text-sm text-[#8e8a75] max-w-sm mt-2">Edit a contact and add a Reminder Interval to track when you need to contact them next.</p>
+          <p className="text-sm text-[#8e8a75] max-w-sm mt-2">Edit a contact and set how often you want to reach out.</p>
+        </div>
+      ) : viewMode === 'schedule' ? (
+        <div className="flex-1 min-h-0 flex flex-col">
+          <div className="flex items-center justify-between mb-4 shrink-0">
+            <button
+              onClick={() => setVisibleMonth((month) => addMonths(month, -1))}
+              className="w-9 h-9 rounded-full flex items-center justify-center text-[#8e8a75] hover:text-[#4a453e] hover:bg-[#f4f1e6] transition-colors"
+              title="Previous month"
+            >
+              <ChevronLeft size={18} />
+            </button>
+            <div className="text-sm font-bold uppercase tracking-wider text-[#5a5a40]">
+              {format(visibleMonth, 'MMMM yyyy')}
+            </div>
+            <button
+              onClick={() => setVisibleMonth((month) => addMonths(month, 1))}
+              className="w-9 h-9 rounded-full flex items-center justify-center text-[#8e8a75] hover:text-[#4a453e] hover:bg-[#f4f1e6] transition-colors"
+              title="Next month"
+            >
+              <ChevronRight size={18} />
+            </button>
+          </div>
+
+          <div className="grid grid-cols-7 text-center text-[10px] font-bold uppercase tracking-wider text-[#a8a38d] mb-2 shrink-0">
+            {['Sun', 'Mon', 'Tue', 'Wed', 'Thu', 'Fri', 'Sat'].map(day => (
+              <div key={day} className="py-1">{day}</div>
+            ))}
+          </div>
+
+          <div className="flex-1 min-h-0 overflow-y-auto custom-scrollbar pr-1">
+            <div className="grid min-h-[528px] grid-cols-7 auto-rows-fr overflow-hidden rounded-2xl border border-[#e0dbc5] bg-[#fbfaf5]">
+              {calendarDays.map(day => {
+                const dayContacts = sortedContacts.filter(contact => isSameDay(getNextContactDate(contact), day));
+                const isCurrentMonth = isSameMonth(day, visibleMonth);
+
+                return (
+                  <div
+                    key={day.toISOString()}
+                    className={`min-h-[88px] border-r border-b border-[#eeeadd] p-1.5 sm:p-2 overflow-hidden ${isCurrentMonth ? 'bg-white/70' : 'bg-[#f4f1e6]/55'}`}
+                  >
+                    <div className={`mb-2 flex h-6 w-6 items-center justify-center rounded-full text-[11px] font-bold ${isToday(day) ? 'bg-[#5a5a40] text-white' : isCurrentMonth ? 'text-[#6d6858]' : 'text-[#c2bda9]'}`}>
+                      {format(day, 'd')}
+                    </div>
+                    <div className="space-y-1">
+                      {dayContacts.slice(0, 3).map(contact => {
+                        const goalColor = getGoalColor(contact);
+                        return (
+                          <button
+                            key={contact.id}
+                            onClick={() => onClick(contact)}
+                            className="w-full max-w-full rounded-md border px-1.5 py-1 text-center text-[10px] sm:text-[11px] font-bold leading-tight transition-transform hover:-translate-y-0.5"
+                            style={{
+                              backgroundColor: goalColor.backgroundColor,
+                              borderColor: goalColor.borderColor,
+                              color: goalColor.color,
+                            }}
+                            title={contact.name}
+                          >
+                            <span className="block whitespace-normal break-words">{getShortName(contact.name)}</span>
+                          </button>
+                        );
+                      })}
+                      {dayContacts.length > 3 && (
+                        <div className="px-1 text-center text-[10px] font-bold text-[#a8a38d]">
+                          +{dayContacts.length - 3} more
+                        </div>
+                      )}
+                    </div>
+                  </div>
+                );
+              })}
+            </div>
+          </div>
         </div>
       ) : (
         <div className="flex-1 overflow-y-auto custom-scrollbar pr-2">
@@ -55,11 +244,10 @@ export function GoalsDashboard({ contacts, onLogContact, onClick }: GoalsDashboa
             }}
           >
             {sortedContacts.map((contact) => {
-              const lastContact = contact.lastContactDate ? parseISO(contact.lastContactDate) : new Date();
               const nextContact = getNextContactDate(contact);
               const daysUntil = differenceInDays(nextContact, new Date());
               const isOverdue = daysUntil < 0;
-
+              const goalColor = getGoalColor(contact);
               return (
                 <motion.div
                   variants={{
@@ -69,54 +257,46 @@ export function GoalsDashboard({ contacts, onLogContact, onClick }: GoalsDashboa
                   whileHover={{ x: 4, transition: { duration: 0.2 } }}
                   key={contact.id}
                   onClick={() => onClick(contact)}
-                  className={`cursor-pointer rounded-2xl p-4 border transition-all flex flex-col sm:flex-row sm:items-center justify-between gap-4 ${
-                    isOverdue 
-                      ? 'bg-[#fff0ed] border-[#e67e5a]/30 hover:border-[#e67e5a]/60' 
-                      : 'bg-[#fbfaf5] border-[#e0dbc5] hover:border-[#d0cdc1]'
-                  }`}
+                  className="cursor-pointer rounded-[18px] px-4 py-3 border transition-all hover:shadow-sm"
+                  style={{
+                    backgroundColor: goalColor.backgroundColor,
+                    borderColor: goalColor.borderColor,
+                  }}
                 >
-                  <div className="flex items-center gap-4 min-w-0 flex-1">
-                    {contact.profilePicture ? (
-                      <img src={contact.profilePicture} alt={contact.name} className="w-12 h-12 rounded-full object-cover shadow-sm border border-[#e0dbc5] shrink-0" />
-                    ) : (
-                      <div className="w-12 h-12 rounded-full bg-[#e8e4d3] text-[#5a5a40] flex items-center justify-center font-serif text-lg border border-[#e0dbc5] shadow-sm shrink-0">
-                        {getInitials(contact.name)}
+                  <div className="flex flex-col sm:flex-row sm:items-center justify-between gap-3">
+                    <div className="flex items-center gap-3 min-w-0 flex-1">
+                      {contact.profilePicture ? (
+                        <img src={contact.profilePicture} alt={contact.name} className="w-11 h-11 rounded-full object-cover shadow-sm border border-[#e0dbc5] shrink-0" />
+                      ) : (
+                        <div className="w-11 h-11 rounded-full bg-[#f4f1e6]/75 text-[#5a5a40] flex items-center justify-center font-serif text-base border border-[#e0dbc5] shadow-sm shrink-0">
+                          {getInitials(contact.name)}
+                        </div>
+                      )}
+                      <div className="min-w-0">
+                        <h3 className="font-bold text-[#4a453e] text-[15px] truncate">{contact.name}</h3>
                       </div>
-                    )}
-                    <div className="min-w-0">
-                      <h3 className="font-bold text-[#4a453e] text-base truncate">{contact.name}</h3>
-                      <p className="text-[11px] uppercase tracking-wider font-bold text-[#8e8a75] mt-0.5 truncate">
-                        Every {contact.reminderIntervalDays} days
-                      </p>
                     </div>
-                  </div>
 
-                  <div className="flex items-center gap-8 text-right shrink-0">
-                    <div className="hidden sm:block">
-                      <p className="text-[10px] uppercase tracking-wider font-bold text-[#a8a38d] mb-1">Last Contact</p>
-                      <p className="text-xs font-medium text-[#6d6858]">{format(lastContact, 'MMM d, yyyy')}</p>
+                    <div className="flex items-center gap-2.5 sm:justify-end shrink-0">
+                      <div className="text-left sm:text-right min-w-[96px]">
+                        <p className="text-[15px] font-serif leading-tight" style={{ color: goalColor.color }}>
+                          {getDueText(daysUntil)}
+                        </p>
+                        <p className="text-[10px] font-bold text-[#8e8a75] mt-0.5">
+                          {isOverdue ? 'Was due' : 'Due'} {format(nextContact, 'MMM d')}
+                        </p>
+                      </div>
+                      <button
+                        onClick={(e) => {
+                          e.stopPropagation();
+                          onLogContact(contact);
+                        }}
+                        className="w-9 h-9 bg-white/90 hover:bg-[#f4f1e6] border border-[#e0dbc5] rounded-full text-[#4a453e] transition-colors flex items-center justify-center shadow-sm"
+                        title="Log Interaction"
+                      >
+                        <Plus size={17} strokeWidth={2.5} />
+                      </button>
                     </div>
-                    <div className="w-32">
-                      <p className="text-[10px] uppercase tracking-wider font-bold text-[#a8a38d] mb-1">Next Contact</p>
-                      <p className={`text-xs font-bold ${isOverdue ? 'text-[#e67e5a]' : 'text-[#5a5a40]'}`}>
-                        {isOverdue 
-                          ? `Overdue (${format(nextContact, 'MMM d')})` 
-                          : daysUntil === 0 
-                            ? 'Due today' 
-                            : `In ${daysUntil} day${daysUntil === 1 ? '' : 's'} (${format(nextContact, 'MMM d')})`
-                        }
-                      </p>
-                    </div>
-                    <button
-                      onClick={(e) => {
-                        e.stopPropagation();
-                        onLogContact(contact);
-                      }}
-                      className="p-2.5 bg-white hover:bg-[#f4f1e6] border border-[#e0dbc5] rounded-full text-[#4a453e] transition-colors"
-                      title="Log Interaction"
-                    >
-                      <Plus size={16} />
-                    </button>
                   </div>
                 </motion.div>
               );

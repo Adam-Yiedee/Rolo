@@ -6,10 +6,11 @@ import { GraphView } from './components/GraphView';
 import { GoalsDashboard } from './components/GoalsDashboard';
 import { initAuth, googleSignIn, logout, getAccessToken } from './lib/auth';
 import { User } from 'firebase/auth';
-import { Contact, getSpreadsheetId, createSpreadsheet, getContacts, saveContacts } from './lib/sheets';
+import { Contact, getSpreadsheetId, createSpreadsheet, getContacts, saveContacts, findExistingSpreadsheet, findSpreadsheetCandidates, setSpreadsheetId, clearSpreadsheetId, getAppSettings, saveAppSettings } from './lib/sheets';
 import { sendReminderEmail } from './lib/gmail';
-import { differenceInDays, parseISO } from 'date-fns';
-import { LogOut, Plus, Search, Loader2, UserRound, LayoutGrid, Network, Settings, X } from 'lucide-react';
+import { DEFAULT_REMINDER_EMAIL_TEMPLATE, ReminderEmailTemplate, normalizeReminderEmailTemplate, renderReminderEmailTemplate } from './lib/reminderEmail';
+import { addDays, differenceInDays, parseISO } from 'date-fns';
+import { Bug, Copy, LogOut, Mail, Plus, RotateCcw, Save, Search, Send, Loader2, UserRound, LayoutGrid, Network, Settings, X } from 'lucide-react';
 import { motion, AnimatePresence } from 'motion/react';
 
 export default function App() {
@@ -26,8 +27,15 @@ export default function App() {
   const [isSearchExpanded, setIsSearchExpanded] = useState(false);
   const [isSettingsOpen, setIsSettingsOpen] = useState(false);
   const [showGraphView, setShowGraphView] = useState(false);
+  const [diagnostics, setDiagnostics] = useState<string>('');
+  const [isRunningDiagnostics, setIsRunningDiagnostics] = useState(false);
+  const [isEmailSettingsOpen, setIsEmailSettingsOpen] = useState(false);
+  const [reminderEmailTemplate, setReminderEmailTemplate] = useState<ReminderEmailTemplate>(DEFAULT_REMINDER_EMAIL_TEMPLATE);
+  const [emailSettingsMessage, setEmailSettingsMessage] = useState('');
+  const [isSavingEmailTemplate, setIsSavingEmailTemplate] = useState(false);
+  const [isSendingTestReminder, setIsSendingTestReminder] = useState(false);
   
-  const [spreadsheetId, setAppSpreadsheetId] = useState<string | null>(getSpreadsheetId());
+  const [spreadsheetId, setAppSpreadsheetId] = useState<string | null>(null);
   
   const [selectedContact, setSelectedContact] = useState<Contact | null>(null);
   const [isModalOpen, setIsModalOpen] = useState(false);
@@ -47,12 +55,13 @@ export default function App() {
         setUser(user);
         setNeedsAuth(false);
         setIsInitializing(false);
-        loadData(token);
+        loadData(token, user.uid, user.email || undefined);
       },
       () => {
         setUser(null);
         setNeedsAuth(true);
         setIsInitializing(false);
+        setReminderEmailTemplate(DEFAULT_REMINDER_EMAIL_TEMPLATE);
       }
     );
     return () => unsubscribe();
@@ -65,7 +74,7 @@ export default function App() {
       if (result) {
         setUser(result.user);
         setNeedsAuth(false);
-        await loadData(result.accessToken);
+        await loadData(result.accessToken, result.user.uid, result.user.email || undefined);
       }
     } catch (err: any) {
       console.error('Login failed:', err);
@@ -79,33 +88,103 @@ export default function App() {
     }
   };
 
-  const loadData = async (token: string) => {
+  const loadData = async (token: string, ownerId?: string, userEmail?: string) => {
     setLoading(true);
     try {
-      let currentSpreadsheetId = spreadsheetId;
+      let currentSpreadsheetId = getSpreadsheetId(ownerId);
+      let loadedContacts: Contact[] | null = null;
+      let loadedReminderEmailTemplate = DEFAULT_REMINDER_EMAIL_TEMPLATE;
+
+      if (currentSpreadsheetId) {
+        try {
+          loadedContacts = await getContacts(token, currentSpreadsheetId);
+          if (loadedContacts.length === 0) {
+            const discoveredSpreadsheetId = await findExistingSpreadsheet(token);
+            if (discoveredSpreadsheetId && discoveredSpreadsheetId !== currentSpreadsheetId) {
+              const discoveredContacts = await getContacts(token, discoveredSpreadsheetId);
+              if (discoveredContacts.length > loadedContacts.length) {
+                currentSpreadsheetId = discoveredSpreadsheetId;
+                loadedContacts = discoveredContacts;
+              }
+            }
+          }
+        } catch (err) {
+          console.warn('Cached spreadsheet unavailable, searching Drive instead:', err);
+          clearSpreadsheetId(ownerId);
+          currentSpreadsheetId = null;
+        }
+      }
+
+      if (!currentSpreadsheetId) {
+        currentSpreadsheetId = await findExistingSpreadsheet(token);
+      }
+
       if (!currentSpreadsheetId) {
         currentSpreadsheetId = await createSpreadsheet(token);
-        setAppSpreadsheetId(currentSpreadsheetId);
+      }
+
+      setSpreadsheetId(currentSpreadsheetId, ownerId);
+      setAppSpreadsheetId(currentSpreadsheetId);
+
+      try {
+        const appSettings = await getAppSettings(token, currentSpreadsheetId);
+        loadedReminderEmailTemplate = appSettings.reminderEmailTemplate;
+        setReminderEmailTemplate(loadedReminderEmailTemplate);
+      } catch (err) {
+        console.warn('Failed to load app settings, using defaults:', err);
+        setReminderEmailTemplate(DEFAULT_REMINDER_EMAIL_TEMPLATE);
       }
       
-      const loadedContacts = await getContacts(token, currentSpreadsheetId);
+      if (!loadedContacts) {
+        loadedContacts = await getContacts(token, currentSpreadsheetId);
+      }
+
       setContacts(loadedContacts);
       
       // Process reminders in the background
-      processReminders(token, loadedContacts, currentSpreadsheetId);
+      processReminders(token, loadedContacts, currentSpreadsheetId, userEmail, loadedReminderEmailTemplate);
     } catch (err: any) {
       console.error('Failed to load data:', err);
-      alert(`Failed to load data from Google Sheets. Please ensure you have enabled the Google Sheets API in your Google Cloud Console. Error: ${err.message}`);
+      alert(`Failed to load data from Google. Please ensure you have enabled the Google Sheets API and Google Drive API in your Google Cloud Console. Error: ${err.message}`);
       // If we failed, maybe spreadsheet was deleted, clear it to recreate next time
-      localStorage.removeItem('rolodex_spreadsheet_id');
+      clearSpreadsheetId(ownerId);
       setAppSpreadsheetId(null);
     } finally {
       setLoading(false);
     }
   };
 
-  const processReminders = async (token: string, currentContacts: Contact[], sid: string) => {
-    if (!user?.email) return;
+  const parseContactDate = (value?: string) => {
+    if (!value) return null;
+    const date = parseISO(value);
+    return Number.isNaN(date.getTime()) ? null : date;
+  };
+
+  const getContactReminderDueDate = (contact: Contact) => {
+    const oneTimeReminderDate = parseContactDate(contact.oneTimeReminderDate);
+    if (oneTimeReminderDate) return oneTimeReminderDate;
+
+    const lastContactDate = parseContactDate(contact.lastContactDate);
+    if (!lastContactDate || !contact.reminderIntervalDays) return null;
+    return addDays(lastContactDate, contact.reminderIntervalDays);
+  };
+
+  const hasContactReminder = (contact: Contact) => Boolean(getContactReminderDueDate(contact));
+
+  const getContactReminderOverdueDays = (contact: Contact) => {
+    const dueDate = getContactReminderDueDate(contact);
+    if (!dueDate) return -9999;
+    return differenceInDays(new Date(), dueDate);
+  };
+
+  const processReminders = async (
+    token: string,
+    currentContacts: Contact[],
+    sid: string,
+    userEmail?: string,
+    template: ReminderEmailTemplate = DEFAULT_REMINDER_EMAIL_TEMPLATE,
+  ) => {
+    if (!userEmail) return;
     let needsSave = false;
     const now = new Date();
     
@@ -113,33 +192,37 @@ export default function App() {
 
     for (let i = 0; i < updatedContacts.length; i++) {
       const contact = updatedContacts[i];
-      if (!contact.lastContactDate || !contact.reminderIntervalDays) continue;
-      
-      const lastContact = parseISO(contact.lastContactDate);
-      const daysSinceContact = differenceInDays(now, lastContact);
-      
-      if (daysSinceContact >= contact.reminderIntervalDays) {
-        let shouldSend = false;
-        
-        if (!contact.lastReminderSentDate) {
-          shouldSend = true;
-        } else {
-          const lastReminder = parseISO(contact.lastReminderSentDate);
-          const daysSinceReminder = differenceInDays(now, lastReminder);
-          // Only send reminder once a day if overdue
-          if (daysSinceReminder >= 1) {
-            shouldSend = true;
-          }
-        }
+      const dueDate = getContactReminderDueDate(contact);
+      if (!dueDate || differenceInDays(now, dueDate) < 0) continue;
 
-        if (shouldSend) {
-          try {
-            await sendReminderEmail(token, user.email, contact.name);
-            updatedContacts[i] = { ...contact, lastReminderSentDate: now.toISOString() };
-            needsSave = true;
-          } catch (e) {
-            console.error('Error sending reminder for', contact.name, e);
-          }
+      const isOneTimeReminder = Boolean(parseContactDate(contact.oneTimeReminderDate));
+      const lastContact = parseContactDate(contact.lastContactDate);
+      const daysSinceContact = lastContact ? Math.max(0, differenceInDays(now, lastContact)) : undefined;
+      let shouldSend = false;
+
+      if (isOneTimeReminder) {
+        shouldSend = !contact.lastReminderSentDate;
+      } else if (!contact.lastReminderSentDate) {
+        shouldSend = true;
+      } else {
+        const lastReminder = parseContactDate(contact.lastReminderSentDate);
+        if (!lastReminder || differenceInDays(now, lastReminder) >= 1) {
+          shouldSend = true;
+        }
+      }
+
+      if (shouldSend) {
+        try {
+          await sendReminderEmail(token, userEmail, contact.name, template, {
+            lastContactDate: contact.lastContactDate,
+            daysSinceContact,
+            reminderIntervalDays: contact.reminderIntervalDays,
+            dueDate: dueDate.toISOString(),
+          });
+          updatedContacts[i] = { ...contact, lastReminderSentDate: now.toISOString() };
+          needsSave = true;
+        } catch (e) {
+          console.error('Error sending reminder for', contact.name, e);
         }
       }
     }
@@ -213,6 +296,138 @@ export default function App() {
     openContactModal(contact, 'history');
   };
 
+  const runDiagnostics = async () => {
+    setIsRunningDiagnostics(true);
+    const lines: string[] = [];
+    const add = (label: string, value: unknown) => {
+      lines.push(`${label}: ${typeof value === 'string' ? value : JSON.stringify(value)}`);
+    };
+
+    try {
+      add('Time', new Date().toISOString());
+      add('Signed in', Boolean(user));
+      add('User email', user?.email || 'missing');
+      add('User ID', user?.uid || 'missing');
+      add('App spreadsheet ID', spreadsheetId || 'missing');
+      add('Cached spreadsheet ID', getSpreadsheetId(user?.uid) || 'missing');
+      add('Visible contacts', contacts.length);
+
+      const token = await getAccessToken();
+      add('Access token available', Boolean(token));
+
+      if (!token) {
+        setDiagnostics(lines.join('\n'));
+        return;
+      }
+
+      try {
+        const tokenInfoRes = await fetch(`https://www.googleapis.com/oauth2/v1/tokeninfo?access_token=${encodeURIComponent(token)}`);
+        const tokenInfo = await tokenInfoRes.json();
+        add('Token info status', tokenInfoRes.status);
+        add('Token scopes', tokenInfo.scope || tokenInfo.error_description || tokenInfo.error || 'missing');
+        add('Gmail send scope present', Boolean(tokenInfo.scope?.includes('https://www.googleapis.com/auth/gmail.send')));
+      } catch (err: any) {
+        add('Token info error', err.message || String(err));
+      }
+
+      try {
+        const candidates = await findSpreadsheetCandidates(token);
+        add('Drive candidates', candidates.map((candidate) => ({
+          id: candidate.id,
+          name: candidate.name,
+          modifiedTime: candidate.modifiedTime,
+          contactCount: candidate.contactCount,
+          error: candidate.error,
+        })));
+
+        const foundId = await findExistingSpreadsheet(token);
+        add('Drive search spreadsheet ID', foundId || 'missing');
+
+        if (foundId) {
+          const foundContacts = await getContacts(token, foundId);
+          add('Drive search contact count', foundContacts.length);
+        }
+      } catch (err: any) {
+        add('Drive search error', err.message || String(err));
+      }
+
+      if (spreadsheetId) {
+        try {
+          const activeContacts = await getContacts(token, spreadsheetId);
+          add('Active spreadsheet contact count', activeContacts.length);
+        } catch (err: any) {
+          add('Active spreadsheet error', err.message || String(err));
+        }
+      }
+    } finally {
+      setDiagnostics(lines.join('\n'));
+      setIsRunningDiagnostics(false);
+    }
+  };
+
+  const saveReminderEmailTemplate = async () => {
+    if (!spreadsheetId) {
+      setEmailSettingsMessage('Spreadsheet is not connected yet.');
+      return;
+    }
+
+    const token = await getAccessToken();
+    if (!token) {
+      setEmailSettingsMessage('Missing Google access token. Sign out and back in to save.');
+      return;
+    }
+
+    const normalizedTemplate = normalizeReminderEmailTemplate(reminderEmailTemplate);
+    setIsSavingEmailTemplate(true);
+    setEmailSettingsMessage('');
+
+    try {
+      await saveAppSettings(token, spreadsheetId, {
+        reminderEmailTemplate: normalizedTemplate,
+      });
+      setReminderEmailTemplate(normalizedTemplate);
+      setEmailSettingsMessage('Reminder email saved.');
+    } catch (err: any) {
+      console.error('Failed to save reminder email template:', err);
+      setEmailSettingsMessage(err.message || 'Failed to save reminder email.');
+    } finally {
+      setIsSavingEmailTemplate(false);
+    }
+  };
+
+  const sendTestReminderEmail = async () => {
+    if (!user?.email) {
+      setEmailSettingsMessage('Your Google account email is missing.');
+      return;
+    }
+
+    const token = await getAccessToken();
+    if (!token) {
+      setEmailSettingsMessage('Missing Google access token. Sign out and back in to test.');
+      return;
+    }
+
+    const lastContactDate = addDays(new Date(), -3).toISOString();
+    const dueDate = addDays(new Date(), 2).toISOString();
+    setIsSendingTestReminder(true);
+    setEmailSettingsMessage('');
+
+    try {
+      await sendReminderEmail(token, user.email, 'Test Contact', normalizeReminderEmailTemplate(reminderEmailTemplate), {
+        lastContactDate,
+        daysSinceContact: 3,
+        reminderIntervalDays: 5,
+        dueDate,
+      });
+      setEmailSettingsMessage(`Test reminder sent to ${user.email}.`);
+    } catch (err: any) {
+      console.error('Failed to send test reminder email:', err);
+      setEmailSettingsMessage(err.message || 'Failed to send test reminder.');
+    } finally {
+      setIsSendingTestReminder(false);
+    }
+  };
+
   if (isInitializing) {
     return (
       <div className="min-h-screen bg-[#fbfaf5] flex items-center justify-center">
@@ -237,7 +452,7 @@ export default function App() {
   }
 
   if (sortBy === 'goals') {
-    filteredContacts = filteredContacts.filter(c => c.reminderIntervalDays && c.reminderIntervalDays > 0);
+    filteredContacts = filteredContacts.filter(hasContactReminder);
   }
 
   filteredContacts.sort((a, b) => {
@@ -248,18 +463,21 @@ export default function App() {
       const dateB = b.lastContactDate ? new Date(b.lastContactDate).getTime() : 0;
       return dateB - dateA; // Descending
     } else if (sortBy === 'goals') {
-      const getOverdue = (c: Contact) => {
-        if (!c.lastContactDate || !c.reminderIntervalDays) return -9999;
-        return differenceInDays(new Date(), parseISO(c.lastContactDate)) - c.reminderIntervalDays;
-      };
-      return getOverdue(b) - getOverdue(a); // Descending overdue
+      return getContactReminderOverdueDays(b) - getContactReminderOverdueDays(a); // Descending overdue
     }
     return 0;
   });
 
-  const overdueCount = contacts.filter(c => c.lastContactDate && c.reminderIntervalDays && differenceInDays(new Date(), parseISO(c.lastContactDate)) >= c.reminderIntervalDays).length;
+  const overdueCount = contacts.filter(c => getContactReminderOverdueDays(c) >= 0).length;
 
   const allCategories = Array.from(new Set(contacts.flatMap(c => c.categories || []))).sort();
+  const reminderEmailPreview = renderReminderEmailTemplate(reminderEmailTemplate, {
+    contactName: 'Test Contact',
+    lastContactDate: addDays(new Date(), -3).toISOString(),
+    daysSinceContact: 3,
+    reminderIntervalDays: 5,
+    dueDate: addDays(new Date(), 2).toISOString(),
+  });
 
   return (
     <div className="min-h-screen bg-[#fbfaf5] text-[#4a453e] font-sans flex flex-col h-screen overflow-hidden">
@@ -430,7 +648,7 @@ export default function App() {
               />
             </div>
           ) : (
-            <div className="flex flex-col gap-4 overflow-y-scroll pb-6 pt-2 px-2 -mx-2 h-full content-start custom-scrollbar">
+            <div className="flex flex-col gap-3 overflow-y-scroll pb-6 pt-1 px-2 -mx-2 h-full content-start custom-scrollbar">
               {filteredContacts.map(contact => (
                 <ContactCard
                   key={contact.id}
@@ -478,7 +696,7 @@ export default function App() {
               animate={{ opacity: 1, scale: 1 }}
               exit={{ opacity: 0, scale: 0.95 }}
               transition={{ duration: 0.2 }}
-              className="bg-[#fbfaf5] rounded-[24px] shadow-2xl w-full max-w-sm overflow-hidden border border-[#e0dbc5] p-6 relative"
+              className="bg-[#fbfaf5] rounded-[24px] shadow-2xl w-full max-w-xl overflow-hidden border border-[#e0dbc5] p-6 relative max-h-[90vh] flex flex-col"
             >
               <button 
                 onClick={() => setIsSettingsOpen(false)} 
@@ -487,9 +705,9 @@ export default function App() {
                 <X size={20} />
               </button>
               
-              <h2 className="text-2xl font-serif text-[#4a453e] mb-6">Settings</h2>
+              <h2 className="text-2xl font-serif text-[#4a453e] mb-6 shrink-0">Settings</h2>
               
-              <div className="space-y-4">
+              <div className="space-y-4 overflow-y-auto custom-scrollbar pr-1 -mr-1">
                 <button
                   onClick={() => {
                     setIsSettingsOpen(false);
@@ -518,6 +736,144 @@ export default function App() {
                       <div className="text-xs text-[#8e8a75] mt-0.5">Return to standard view</div>
                     </div>
                   </button>
+                )}
+
+                <button
+                  onClick={() => {
+                    setIsEmailSettingsOpen(!isEmailSettingsOpen);
+                    setEmailSettingsMessage('');
+                  }}
+                  className="w-full flex items-center gap-3 p-4 bg-white hover:bg-[#f4f1e6] border border-[#e0dbc5] rounded-xl transition-colors text-left"
+                >
+                  <Mail className="text-[#5a5a40]" size={20} />
+                  <div>
+                    <div className="font-bold text-[#4a453e] text-sm uppercase tracking-wide">Reminder Emails</div>
+                    <div className="text-xs text-[#8e8a75] mt-0.5">Edit the message and send a test</div>
+                  </div>
+                </button>
+
+                <AnimatePresence initial={false}>
+                  {isEmailSettingsOpen && (
+                    <motion.div
+                      initial={{ opacity: 0, height: 0 }}
+                      animate={{ opacity: 1, height: 'auto' }}
+                      exit={{ opacity: 0, height: 0 }}
+                      transition={{ duration: 0.2 }}
+                      className="overflow-hidden"
+                    >
+                      <div className="space-y-4 rounded-xl border border-[#e0dbc5] bg-white p-4">
+                        <div className="space-y-1.5">
+                          <label className="text-[10px] uppercase tracking-wider font-bold text-[#a8a38d]">Subject</label>
+                          <input
+                            type="text"
+                            value={reminderEmailTemplate.subject}
+                            onChange={(e) => setReminderEmailTemplate({ ...reminderEmailTemplate, subject: e.target.value })}
+                            className="w-full px-3 py-2 bg-[#f4f1e6] border border-transparent rounded-xl focus:bg-white focus:border-[#e0dbc5] focus:ring-4 focus:ring-[#5a5a40]/10 transition-all outline-none text-sm text-[#4a453e]"
+                          />
+                        </div>
+
+                        <div className="space-y-1.5">
+                          <label className="text-[10px] uppercase tracking-wider font-bold text-[#a8a38d]">Body</label>
+                          <textarea
+                            value={reminderEmailTemplate.body}
+                            onChange={(e) => setReminderEmailTemplate({ ...reminderEmailTemplate, body: e.target.value })}
+                            rows={5}
+                            className="w-full px-3 py-2 bg-[#f4f1e6] border border-transparent rounded-xl focus:bg-white focus:border-[#e0dbc5] focus:ring-4 focus:ring-[#5a5a40]/10 transition-all outline-none text-sm text-[#4a453e] resize-y min-h-28"
+                          />
+                        </div>
+
+                        <div className="flex flex-wrap gap-2">
+                          {['{name}', '{daysSinceContact}', '{dueDate}', '{lastContactDate}'].map((token) => (
+                            <button
+                              key={token}
+                              type="button"
+                              onClick={() => setReminderEmailTemplate({
+                                ...reminderEmailTemplate,
+                                body: `${reminderEmailTemplate.body}${reminderEmailTemplate.body.endsWith(' ') || reminderEmailTemplate.body.endsWith('\n') ? '' : ' '}${token}`,
+                              })}
+                              className="rounded-full border border-[#e0dbc5] bg-[#fbfaf5] px-2.5 py-1 text-[11px] font-medium text-[#6d6858] hover:bg-[#f4f1e6] transition-colors"
+                            >
+                              {token}
+                            </button>
+                          ))}
+                        </div>
+
+                        {emailSettingsMessage && (
+                          <p className="rounded-xl bg-[#f4f1e6] px-3 py-2 text-xs text-[#6d6858]">{emailSettingsMessage}</p>
+                        )}
+
+                        <div className="flex flex-wrap items-center justify-between gap-2">
+                          <button
+                            type="button"
+                            onClick={() => {
+                              setReminderEmailTemplate(DEFAULT_REMINDER_EMAIL_TEMPLATE);
+                              setEmailSettingsMessage('Default reminder restored. Save to keep it.');
+                            }}
+                            className="inline-flex items-center gap-2 px-3 py-2 text-xs font-bold uppercase tracking-wider text-[#6d6858] hover:bg-[#f4f1e6] rounded-full transition-colors"
+                          >
+                            <RotateCcw size={14} /> Reset
+                          </button>
+
+                          <div className="flex flex-wrap gap-2">
+                            <button
+                              type="button"
+                              onClick={sendTestReminderEmail}
+                              disabled={isSendingTestReminder || isSavingEmailTemplate}
+                              className="inline-flex items-center gap-2 px-3 py-2 rounded-full border border-[#e0dbc5] bg-white text-xs font-bold uppercase tracking-wider text-[#5a5a40] hover:bg-[#f4f1e6] disabled:opacity-60 disabled:cursor-not-allowed transition-colors"
+                            >
+                              {isSendingTestReminder ? <Loader2 size={14} className="animate-spin" /> : <Send size={14} />}
+                              Test
+                            </button>
+                            <button
+                              type="button"
+                              onClick={saveReminderEmailTemplate}
+                              disabled={isSavingEmailTemplate || isSendingTestReminder}
+                              className="inline-flex items-center gap-2 px-4 py-2 rounded-full bg-[#5a5a40] text-[#fbfaf5] text-xs font-bold uppercase tracking-wider hover:bg-[#4a4a34] disabled:opacity-60 disabled:cursor-not-allowed transition-colors"
+                            >
+                              {isSavingEmailTemplate ? <Loader2 size={14} className="animate-spin" /> : <Save size={14} />}
+                              Save
+                            </button>
+                          </div>
+                        </div>
+
+                        <div className="rounded-xl border border-[#e0dbc5] bg-[#fbfaf5] p-3">
+                          <div className="text-[10px] uppercase tracking-wider font-bold text-[#a8a38d] mb-2">Preview</div>
+                          <div className="text-sm font-semibold text-[#4a453e] break-words">{reminderEmailPreview.subject}</div>
+                          <div className="mt-2 max-h-28 overflow-auto whitespace-pre-wrap text-xs leading-relaxed text-[#6d6858] break-words custom-scrollbar">{reminderEmailPreview.body}</div>
+                        </div>
+                      </div>
+                    </motion.div>
+                  )}
+                </AnimatePresence>
+
+                <button
+                  onClick={runDiagnostics}
+                  disabled={isRunningDiagnostics}
+                  className="w-full flex items-center gap-3 p-4 bg-white hover:bg-[#f4f1e6] border border-[#e0dbc5] rounded-xl transition-colors text-left disabled:opacity-60 disabled:cursor-not-allowed"
+                >
+                  {isRunningDiagnostics ? <Loader2 className="text-[#5a5a40] animate-spin" size={20} /> : <Bug className="text-[#5a5a40]" size={20} />}
+                  <div>
+                    <div className="font-bold text-[#4a453e] text-sm uppercase tracking-wide">Run Sync Diagnostics</div>
+                    <div className="text-xs text-[#8e8a75] mt-0.5">Check Google access and storage</div>
+                  </div>
+                </button>
+
+                {diagnostics && (
+                  <div className="space-y-2">
+                    <div className="flex items-center justify-between">
+                      <div className="text-xs font-bold uppercase tracking-wide text-[#8e8a75]">Diagnostics</div>
+                      <button
+                        onClick={() => navigator.clipboard.writeText(diagnostics)}
+                        className="text-[#8e8a75] hover:text-[#4a453e] p-1 rounded-full transition-colors"
+                        title="Copy diagnostics"
+                      >
+                        <Copy size={16} />
+                      </button>
+                    </div>
+                    <pre className="max-h-52 overflow-auto whitespace-pre-wrap break-words rounded-xl border border-[#e0dbc5] bg-white p-3 text-[11px] leading-relaxed text-[#4a453e]">
+                      {diagnostics}
+                    </pre>
+                  </div>
                 )}
               </div>
             </motion.div>

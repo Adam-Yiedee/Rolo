@@ -1,3 +1,9 @@
+import {
+  DEFAULT_REMINDER_EMAIL_TEMPLATE,
+  ReminderEmailTemplate,
+  normalizeReminderEmailTemplate,
+} from './reminderEmail';
+
 export interface LinkedContact {
   id: string;
   relation: string;
@@ -30,23 +36,53 @@ export interface Contact {
   lastContactDate: string; // ISO string
   reminderIntervalDays: number | null;
   lastReminderSentDate: string; // ISO string
+  oneTimeReminderDate?: string; // ISO string
+  oneTimeReminderCreatedDate?: string; // ISO string
   linkedContacts: LinkedContact[];
   subContacts: SubContact[];
   history: ContactHistoryEntry[];
   categories: string[];
 }
 
+export interface SpreadsheetCandidate {
+  id: string;
+  name: string;
+  modifiedTime?: string;
+  contactCount?: number;
+  error?: string;
+}
+
+export interface AppSettings {
+  reminderEmailTemplate: ReminderEmailTemplate;
+}
+
+const SPREADSHEET_TITLE = 'Roldex Contacts';
 const STORAGE_KEY = 'rolodex_spreadsheet_id';
-
-export const getSpreadsheetId = (): string | null => {
-  return localStorage.getItem(STORAGE_KEY);
-};
-
-export const setSpreadsheetId = (id: string) => {
-  localStorage.setItem(STORAGE_KEY, id);
-};
-
 const SHEET_NAME = 'Contacts';
+const SETTINGS_SHEET_NAME = 'Settings';
+const DEFAULT_APP_SETTINGS: AppSettings = {
+  reminderEmailTemplate: DEFAULT_REMINDER_EMAIL_TEMPLATE,
+};
+
+const getStorageKey = (ownerId?: string | null): string => {
+  return ownerId ? `${STORAGE_KEY}:${ownerId}` : STORAGE_KEY;
+};
+
+export const getSpreadsheetId = (ownerId?: string | null): string | null => {
+  return localStorage.getItem(getStorageKey(ownerId)) || localStorage.getItem(STORAGE_KEY);
+};
+
+export const setSpreadsheetId = (id: string, ownerId?: string | null) => {
+  localStorage.setItem(getStorageKey(ownerId), id);
+  if (!ownerId) {
+    localStorage.setItem(STORAGE_KEY, id);
+  }
+};
+
+export const clearSpreadsheetId = (ownerId?: string | null) => {
+  localStorage.removeItem(getStorageKey(ownerId));
+  localStorage.removeItem(STORAGE_KEY);
+};
 const HEADERS = [
   'ID',
   'Name',
@@ -64,39 +100,29 @@ const HEADERS = [
   'Background',
   'LinkedIn URL',
   'Email',
-  'Phone Number'
+  'Phone Number',
+  'One-Time Reminder Date',
+  'One-Time Reminder Created Date'
 ];
 
-export async function createSpreadsheet(token: string): Promise<string> {
-  const res = await fetch('https://sheets.googleapis.com/v4/spreadsheets', {
-    method: 'POST',
-    headers: {
-      Authorization: `Bearer ${token}`,
-      'Content-Type': 'application/json',
-    },
-    body: JSON.stringify({
-      properties: {
-        title: 'Roldex Contacts',
-      },
-      sheets: [
-        {
-          properties: {
-            title: SHEET_NAME,
-          },
-        },
-      ],
-    }),
-  });
-
-  if (!res.ok) {
-    throw new Error('Failed to create spreadsheet');
+async function getGoogleApiError(res: Response, fallback: string): Promise<Error> {
+  let detail = '';
+  try {
+    const data = await res.json();
+    detail = data.error?.message || JSON.stringify(data.error || data);
+  } catch {
+    try {
+      detail = await res.text();
+    } catch {
+      detail = '';
+    }
   }
 
-  const data = await res.json();
-  const spreadsheetId = data.spreadsheetId;
-  
-  // Set headers
-  await fetch(`https://sheets.googleapis.com/v4/spreadsheets/${spreadsheetId}/values/${SHEET_NAME}!A1:Q1?valueInputOption=USER_ENTERED`, {
+  return new Error(`${fallback} (${res.status}${res.statusText ? ` ${res.statusText}` : ''}${detail ? `: ${detail}` : ''})`);
+}
+
+async function ensureContactHeaders(token: string, spreadsheetId: string): Promise<void> {
+  const headerRes = await fetch(`https://sheets.googleapis.com/v4/spreadsheets/${spreadsheetId}/values/${SHEET_NAME}!A1:S1?valueInputOption=USER_ENTERED`, {
     method: 'PUT',
     headers: {
       Authorization: `Bearer ${token}`,
@@ -107,12 +133,114 @@ export async function createSpreadsheet(token: string): Promise<string> {
     }),
   });
 
-  setSpreadsheetId(spreadsheetId);
+  if (!headerRes.ok) {
+    throw await getGoogleApiError(headerRes, 'Failed to initialize spreadsheet headers');
+  }
+}
+
+export async function createSpreadsheet(token: string): Promise<string> {
+  const res = await fetch('https://sheets.googleapis.com/v4/spreadsheets', {
+    method: 'POST',
+    headers: {
+      Authorization: `Bearer ${token}`,
+      'Content-Type': 'application/json',
+    },
+    body: JSON.stringify({
+      properties: {
+        title: SPREADSHEET_TITLE,
+      },
+      sheets: [
+        {
+          properties: {
+            title: SHEET_NAME,
+          },
+        },
+        {
+          properties: {
+            title: SETTINGS_SHEET_NAME,
+          },
+        },
+      ],
+    }),
+  });
+
+  if (!res.ok) {
+    throw await getGoogleApiError(res, 'Failed to create spreadsheet');
+  }
+
+  const data = await res.json();
+  const spreadsheetId = data.spreadsheetId;
+  
+  // Set headers
+  await ensureContactHeaders(token, spreadsheetId);
+
+  await saveAppSettings(token, spreadsheetId, DEFAULT_APP_SETTINGS);
+
   return spreadsheetId;
 }
 
+export async function findExistingSpreadsheet(token: string): Promise<string | null> {
+  const candidates = await findSpreadsheetCandidates(token);
+  const readableCandidates = candidates
+    .filter((candidate) => typeof candidate.contactCount === 'number')
+    .sort((a, b) => {
+      const countDelta = (b.contactCount || 0) - (a.contactCount || 0);
+      if (countDelta !== 0) return countDelta;
+      return (new Date(b.modifiedTime || 0).getTime()) - (new Date(a.modifiedTime || 0).getTime());
+    });
+
+  return readableCandidates[0]?.id || null;
+}
+
+export async function findSpreadsheetCandidates(token: string): Promise<SpreadsheetCandidate[]> {
+  const query = [
+    "(name contains 'Roldex' or name contains 'Rolodex')",
+    "mimeType = 'application/vnd.google-apps.spreadsheet'",
+    'trashed = false',
+  ].join(' and ');
+
+  const params = new URLSearchParams({
+    q: query,
+    pageSize: '10',
+    orderBy: 'modifiedTime desc',
+    fields: 'files(id,name,modifiedTime)',
+  });
+
+  const res = await fetch(`https://www.googleapis.com/drive/v3/files?${params.toString()}`, {
+    headers: {
+      Authorization: `Bearer ${token}`,
+    },
+  });
+
+  if (!res.ok) {
+    throw await getGoogleApiError(res, 'Failed to search Google Drive for an existing contacts spreadsheet');
+  }
+
+  const data = await res.json();
+  const files = (data.files || []) as Array<{ id: string; name: string; modifiedTime?: string }>;
+
+  return Promise.all(files.map(async (file) => {
+    try {
+      const contacts = await getContacts(token, file.id);
+      return {
+        id: file.id,
+        name: file.name,
+        modifiedTime: file.modifiedTime,
+        contactCount: contacts.length,
+      };
+    } catch (err: any) {
+      return {
+        id: file.id,
+        name: file.name,
+        modifiedTime: file.modifiedTime,
+        error: err.message || String(err),
+      };
+    }
+  }));
+}
+
 export async function getContacts(token: string, spreadsheetId: string): Promise<Contact[]> {
-  const res = await fetch(`https://sheets.googleapis.com/v4/spreadsheets/${spreadsheetId}/values/${SHEET_NAME}!A2:Q`, {
+  const res = await fetch(`https://sheets.googleapis.com/v4/spreadsheets/${spreadsheetId}/values/${SHEET_NAME}!A2:S`, {
     headers: {
       Authorization: `Bearer ${token}`,
     },
@@ -122,7 +250,7 @@ export async function getContacts(token: string, spreadsheetId: string): Promise
     if (res.status === 404) {
       throw new Error('Spreadsheet not found');
     }
-    throw new Error('Failed to fetch contacts');
+    throw await getGoogleApiError(res, 'Failed to fetch contacts');
   }
 
   const data = await res.json();
@@ -157,20 +285,28 @@ export async function getContacts(token: string, spreadsheetId: string): Promise
       background: row[13] || '',
       linkedInUrl: row[14] || '',
       email: row[15] || '',
-      phoneNumber: row[16] || ''
+      phoneNumber: row[16] || '',
+      oneTimeReminderDate: row[17] || '',
+      oneTimeReminderCreatedDate: row[18] || ''
     };
   });
 }
 
 export async function saveContacts(token: string, spreadsheetId: string, contacts: Contact[]): Promise<void> {
+  await ensureContactHeaders(token, spreadsheetId);
+
   // We will clear the existing data and overwrite to make it simple.
   // First clear
-  await fetch(`https://sheets.googleapis.com/v4/spreadsheets/${spreadsheetId}/values/${SHEET_NAME}!A2:Q:clear`, {
+  const clearRes = await fetch(`https://sheets.googleapis.com/v4/spreadsheets/${spreadsheetId}/values/${SHEET_NAME}!A2:S:clear`, {
     method: 'POST',
     headers: {
       Authorization: `Bearer ${token}`,
     },
   });
+
+  if (!clearRes.ok) {
+    throw await getGoogleApiError(clearRes, 'Failed to clear contacts');
+  }
 
   if (contacts.length === 0) return;
 
@@ -191,10 +327,12 @@ export async function saveContacts(token: string, spreadsheetId: string, contact
     c.background || '',
     c.linkedInUrl || '',
     c.email || '',
-    c.phoneNumber || ''
+    c.phoneNumber || '',
+    c.oneTimeReminderDate || '',
+    c.oneTimeReminderCreatedDate || ''
   ]);
 
-  await fetch(`https://sheets.googleapis.com/v4/spreadsheets/${spreadsheetId}/values/${SHEET_NAME}!A2:Q?valueInputOption=USER_ENTERED`, {
+  const saveRes = await fetch(`https://sheets.googleapis.com/v4/spreadsheets/${spreadsheetId}/values/${SHEET_NAME}!A2:S?valueInputOption=USER_ENTERED`, {
     method: 'PUT',
     headers: {
       Authorization: `Bearer ${token}`,
@@ -204,4 +342,112 @@ export async function saveContacts(token: string, spreadsheetId: string, contact
       values,
     }),
   });
+
+  if (!saveRes.ok) {
+    throw await getGoogleApiError(saveRes, 'Failed to save contacts');
+  }
+}
+
+async function ensureSettingsSheet(token: string, spreadsheetId: string): Promise<void> {
+  const metadataRes = await fetch(`https://sheets.googleapis.com/v4/spreadsheets/${spreadsheetId}?fields=sheets(properties(title))`, {
+    headers: {
+      Authorization: `Bearer ${token}`,
+    },
+  });
+
+  if (!metadataRes.ok) {
+    throw await getGoogleApiError(metadataRes, 'Failed to read spreadsheet metadata');
+  }
+
+  const metadata = await metadataRes.json();
+  const sheets = (metadata.sheets || []) as Array<{ properties?: { title?: string } }>;
+  if (sheets.some((sheet) => sheet.properties?.title === SETTINGS_SHEET_NAME)) return;
+
+  const addSheetRes = await fetch(`https://sheets.googleapis.com/v4/spreadsheets/${spreadsheetId}:batchUpdate`, {
+    method: 'POST',
+    headers: {
+      Authorization: `Bearer ${token}`,
+      'Content-Type': 'application/json',
+    },
+    body: JSON.stringify({
+      requests: [
+        {
+          addSheet: {
+            properties: {
+              title: SETTINGS_SHEET_NAME,
+            },
+          },
+        },
+      ],
+    }),
+  });
+
+  if (!addSheetRes.ok) {
+    throw await getGoogleApiError(addSheetRes, 'Failed to create settings sheet');
+  }
+}
+
+export async function getAppSettings(token: string, spreadsheetId: string): Promise<AppSettings> {
+  await ensureSettingsSheet(token, spreadsheetId);
+
+  const res = await fetch(`https://sheets.googleapis.com/v4/spreadsheets/${spreadsheetId}/values/${SETTINGS_SHEET_NAME}!A2:B`, {
+    headers: {
+      Authorization: `Bearer ${token}`,
+    },
+  });
+
+  if (!res.ok) {
+    throw await getGoogleApiError(res, 'Failed to fetch app settings');
+  }
+
+  const data = await res.json();
+  const rows = (data.values || []) as string[][];
+  const settingsByKey = new Map(rows.map((row) => [row[0], row[1]]));
+  const reminderTemplateValue = settingsByKey.get('reminderEmailTemplate');
+  let reminderEmailTemplate = DEFAULT_REMINDER_EMAIL_TEMPLATE;
+
+  if (reminderTemplateValue) {
+    try {
+      reminderEmailTemplate = normalizeReminderEmailTemplate(JSON.parse(reminderTemplateValue));
+    } catch (err) {
+      console.warn('Failed to parse reminder email template setting:', err);
+    }
+  }
+
+  return {
+    reminderEmailTemplate,
+  };
+}
+
+export async function saveAppSettings(token: string, spreadsheetId: string, settings: AppSettings): Promise<void> {
+  await ensureSettingsSheet(token, spreadsheetId);
+
+  const clearRes = await fetch(`https://sheets.googleapis.com/v4/spreadsheets/${spreadsheetId}/values/${SETTINGS_SHEET_NAME}!A:B:clear`, {
+    method: 'POST',
+    headers: {
+      Authorization: `Bearer ${token}`,
+    },
+  });
+
+  if (!clearRes.ok) {
+    throw await getGoogleApiError(clearRes, 'Failed to clear app settings');
+  }
+
+  const saveRes = await fetch(`https://sheets.googleapis.com/v4/spreadsheets/${spreadsheetId}/values/${SETTINGS_SHEET_NAME}!A1:B?valueInputOption=RAW`, {
+    method: 'PUT',
+    headers: {
+      Authorization: `Bearer ${token}`,
+      'Content-Type': 'application/json',
+    },
+    body: JSON.stringify({
+      values: [
+        ['Key', 'Value'],
+        ['reminderEmailTemplate', JSON.stringify(normalizeReminderEmailTemplate(settings.reminderEmailTemplate))],
+      ],
+    }),
+  });
+
+  if (!saveRes.ok) {
+    throw await getGoogleApiError(saveRes, 'Failed to save app settings');
+  }
 }

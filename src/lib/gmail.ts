@@ -1,21 +1,67 @@
-export async function sendReminderEmail(token: string, toEmail: string, contactName: string) {
-  const subject = `Reminder: Reach out to ${contactName}`;
-  const message = `Hello,\n\nThis is a reminder from your Roldex to reach out to ${contactName}.\n\nIt's been a while since your last contact. Log into your Roldex to view their details and record your next interaction!\n\nBest,\nYour Roldex`;
-  
+import {
+  DEFAULT_REMINDER_EMAIL_TEMPLATE,
+  ReminderEmailContext,
+  ReminderEmailTemplate,
+  renderReminderEmailTemplate,
+} from './reminderEmail';
+
+const encodeUtf8Base64 = (value: string) => {
+  const bytes = new TextEncoder().encode(value);
+  let binary = '';
+  bytes.forEach((byte) => {
+    binary += String.fromCharCode(byte);
+  });
+  return btoa(binary);
+};
+
+const encodeBase64Url = (value: string) => encodeUtf8Base64(value)
+  .replace(/\+/g, '-')
+  .replace(/\//g, '_')
+  .replace(/=+$/, '');
+
+const encodeMimeHeader = (value: string) => {
+  if (/^[\x00-\x7F]*$/.test(value)) return value;
+  return `=?UTF-8?B?${encodeUtf8Base64(value)}?=`;
+};
+
+async function getGmailApiError(res: Response, fallback: string): Promise<Error> {
+  let detail = '';
+  try {
+    const data = await res.json();
+    detail = data.error?.message || JSON.stringify(data.error || data);
+  } catch {
+    try {
+      detail = await res.text();
+    } catch {
+      detail = '';
+    }
+  }
+
+  return new Error(`${fallback} (${res.status}${res.statusText ? ` ${res.statusText}` : ''}${detail ? `: ${detail}` : ''})`);
+}
+
+export async function sendReminderEmail(
+  token: string,
+  toEmail: string,
+  contactName: string,
+  template: ReminderEmailTemplate = DEFAULT_REMINDER_EMAIL_TEMPLATE,
+  context: Partial<Omit<ReminderEmailContext, 'contactName'>> = {},
+) {
+  const rendered = renderReminderEmailTemplate(template, {
+    ...context,
+    contactName,
+  });
+
   const rawMessage = [
     `To: ${toEmail}`,
     'Content-Type: text/plain; charset="UTF-8"',
     'MIME-Version: 1.0',
-    `Subject: ${subject}`,
+    `Subject: ${encodeMimeHeader(rendered.subject)}`,
     '',
-    message,
-  ].join('\n');
+    rendered.body,
+  ].join('\r\n');
 
-  // Base64url encode the message
-  const encodedMessage = btoa(unescape(encodeURIComponent(rawMessage)))
-    .replace(/\+/g, '-')
-    .replace(/\//g, '_')
-    .replace(/=+$/, '');
+  const encodedMessage = encodeBase64Url(rawMessage);
 
   const res = await fetch('https://gmail.googleapis.com/gmail/v1/users/me/messages/send', {
     method: 'POST',
@@ -29,8 +75,8 @@ export async function sendReminderEmail(token: string, toEmail: string, contactN
   });
 
   if (!res.ok) {
-    const errorData = await res.json();
-    console.error('Failed to send email', errorData);
-    throw new Error('Failed to send email reminder');
+    throw await getGmailApiError(res, 'Failed to send reminder email');
   }
+
+  return res.json();
 }

@@ -1,5 +1,5 @@
 import React, { useState, useEffect, useRef } from 'react';
-import { Contact, SubContact, LinkedContact } from '../lib/sheets';
+import { Contact, SubContact, LinkedContact, ContactHistoryEntry } from '../lib/sheets';
 import { X, Camera, Plus, Trash2, Copy, Check, Mail, Phone } from 'lucide-react';
 import { resizeImage } from '../lib/image';
 import { motion, AnimatePresence } from 'motion/react';
@@ -57,6 +57,98 @@ const getInitials = (name: string) => {
   return (parts[0][0] + parts[parts.length - 1][0]).toUpperCase();
 };
 
+const getContactEveryText = (days: number | null) => {
+  if (!days || days < 1) return 'Leave blank if you do not want email reminders.';
+  if (days === 1) return 'Email reminder every day to reach out.';
+  return `Email reminder every ${days} days to reach out.`;
+};
+
+const getDateInputValue = (date: Date) => {
+  const localDate = new Date(date.getTime() - date.getTimezoneOffset() * 60000);
+  return localDate.toISOString().split('T')[0];
+};
+
+const getDaysAgoDate = (daysAgo: number) => {
+  const date = new Date();
+  date.setDate(date.getDate() - daysAgo);
+  return getDateInputValue(date);
+};
+
+const getDaysFromNowDate = (daysFromNow: number) => {
+  const date = new Date();
+  date.setDate(date.getDate() + daysFromNow);
+  return getDateInputValue(date);
+};
+
+const getDateFromInputValue = (value: string) => {
+  const [year, month, day] = value.split('-').map(Number);
+  return new Date(year, month - 1, day);
+};
+
+const getIsoFromDateInputValue = (value: string) => {
+  if (!value) return '';
+  const date = getDateFromInputValue(value);
+  return Number.isNaN(date.getTime()) ? '' : date.toISOString();
+};
+
+const getDaysAgoFromDateInput = (value: string) => {
+  if (!value) return 0;
+  const today = new Date();
+  today.setHours(0, 0, 0, 0);
+  const date = getDateFromInputValue(value);
+  date.setHours(0, 0, 0, 0);
+  return Math.max(0, Math.round((today.getTime() - date.getTime()) / 86400000));
+};
+
+const getDaysUntilFromDateInput = (value: string) => {
+  if (!value) return 3;
+  const today = new Date();
+  today.setHours(0, 0, 0, 0);
+  const date = getDateFromInputValue(value);
+  date.setHours(0, 0, 0, 0);
+  return Math.max(0, Math.round((date.getTime() - today.getTime()) / 86400000));
+};
+
+const getDaysAgoLabel = (daysAgo: number) => {
+  if (daysAgo === 0) return 'Today';
+  if (daysAgo === 1) return 'Yesterday';
+  return `${daysAgo} days ago`;
+};
+
+const getOneTimeReminderText = (daysUntil: number) => {
+  if (daysUntil === 0) return 'Remind today.';
+  if (daysUntil === 1) return 'Remind tomorrow.';
+  return `Remind in ${daysUntil} days.`;
+};
+
+const getHistoryEntryTime = (entry: ContactHistoryEntry) => {
+  const time = new Date(entry.date).getTime();
+  return Number.isFinite(time) ? time : -Infinity;
+};
+
+const sortHistoryByDate = (history: ContactHistoryEntry[]) => {
+  return [...history].sort((a, b) => getHistoryEntryTime(b) - getHistoryEntryTime(a));
+};
+
+const syncLastContactDateFromHistory = (contact: Contact, history: ContactHistoryEntry[]) => {
+  const sortedHistory = sortHistoryByDate(history);
+  const latestEntry = sortedHistory.find((entry) => Number.isFinite(getHistoryEntryTime(entry)));
+
+  return {
+    ...contact,
+    history: sortedHistory,
+    lastContactDate: latestEntry?.date || '',
+  };
+};
+
+const getHistoryDateInputValue = (value: string) => {
+  const date = new Date(value);
+  if (Number.isNaN(date.getTime())) return getDateInputValue(new Date());
+  return getDateInputValue(date);
+};
+
+const MAX_QUICK_LOG_DAYS = 30;
+
 interface ContactModalProps {
   contact: Contact | null;
   isOpen: boolean;
@@ -78,6 +170,8 @@ export function ContactModal({ contact, isOpen, onClose, onSave, onDelete, allCo
     lastContactDate: new Date().toISOString(),
     reminderIntervalDays: null,
     lastReminderSentDate: '',
+    oneTimeReminderDate: '',
+    oneTimeReminderCreatedDate: '',
     linkedContacts: [],
     subContacts: [],
     history: [],
@@ -87,7 +181,7 @@ export function ContactModal({ contact, isOpen, onClose, onSave, onDelete, allCo
   const fileInputRef = useRef<HTMLInputElement>(null);
   const [activeTab, setActiveTab] = useState<'details' | 'history'>(initialTab);
   const [newCategory, setNewCategory] = useState('');
-  const [newInteractionDate, setNewInteractionDate] = useState(() => new Date().toISOString().split('T')[0]);
+  const [newInteractionDate, setNewInteractionDate] = useState(() => getDateInputValue(new Date()));
   const [newInteractionNotes, setNewInteractionNotes] = useState('');
   const [editingSubContactId, setEditingSubContactId] = useState<string | null>(null);
   const [isNestedExpanded, setIsNestedExpanded] = useState(false);
@@ -102,7 +196,9 @@ export function ContactModal({ contact, isOpen, onClose, onSave, onDelete, allCo
     if (contact) {
       setFormData({
         ...contact,
-        categories: contact.categories || []
+        categories: contact.categories || [],
+        oneTimeReminderDate: contact.oneTimeReminderDate || '',
+        oneTimeReminderCreatedDate: contact.oneTimeReminderCreatedDate || ''
       });
     } else {
       setFormData({
@@ -119,6 +215,8 @@ export function ContactModal({ contact, isOpen, onClose, onSave, onDelete, allCo
         lastContactDate: new Date().toISOString(),
         reminderIntervalDays: null,
         lastReminderSentDate: '',
+        oneTimeReminderDate: '',
+        oneTimeReminderCreatedDate: '',
         linkedContacts: [],
         subContacts: [],
         history: [],
@@ -215,29 +313,57 @@ export function ContactModal({ contact, isOpen, onClose, onSave, onDelete, allCo
   };
 
   const handleAddInteraction = () => {
-    if (!newInteractionNotes.trim()) return;
-    
-    // Create date preserving local timezone intent roughly
-    const dateObj = new Date(newInteractionDate);
-    const interactionDate = new Date(dateObj.getTime() + dateObj.getTimezoneOffset() * 60000).toISOString();
-    
-    // Update last contact date if this interaction is newer
-    const currentLast = new Date(formData.lastContactDate || 0).getTime();
-    const newLast = Math.max(currentLast, new Date(interactionDate).getTime());
-    
-    setFormData({
+    const interactionDate = getIsoFromDateInputValue(newInteractionDate);
+    const notes = newInteractionNotes.trim() || 'Contacted';
+    const reminderClearedFormData = formData.oneTimeReminderDate ? {
       ...formData,
-      lastContactDate: new Date(newLast).toISOString(),
-      history: [{ id: crypto.randomUUID(), date: interactionDate, notes: newInteractionNotes }, ...formData.history]
-    });
+      oneTimeReminderDate: '',
+      oneTimeReminderCreatedDate: '',
+      lastReminderSentDate: '',
+    } : formData;
+    const updatedFormData = syncLastContactDateFromHistory(reminderClearedFormData, [
+      { id: crypto.randomUUID(), date: interactionDate, notes },
+      ...formData.history,
+    ]);
+
+    setFormData(updatedFormData);
     setNewInteractionNotes('');
-    setNewInteractionDate(new Date().toISOString().split('T')[0]);
+    setNewInteractionDate(getDateInputValue(new Date()));
+    onSave(updatedFormData);
   };
 
-  const updateHistory = (index: number, notes: string) => {
-    const newHist = [...formData.history];
-    newHist[index].notes = notes;
-    setFormData({ ...formData, history: newHist });
+  const interactionDaysAgo = getDaysAgoFromDateInput(newInteractionDate);
+  const sliderDaysAgo = Math.min(interactionDaysAgo, MAX_QUICK_LOG_DAYS);
+  const sliderProgress = `${(sliderDaysAgo / MAX_QUICK_LOG_DAYS) * 100}%`;
+  const reminderMode = formData.oneTimeReminderDate
+    ? 'once'
+    : formData.reminderIntervalDays && formData.reminderIntervalDays > 0
+      ? 'recurring'
+      : 'none';
+  const oneTimeReminderInputValue = formData.oneTimeReminderDate
+    ? getHistoryDateInputValue(formData.oneTimeReminderDate)
+    : getDaysFromNowDate(3);
+  const oneTimeReminderDaysAhead = getDaysUntilFromDateInput(oneTimeReminderInputValue);
+  const oneTimeReminderSliderValue = Math.min(Math.max(oneTimeReminderDaysAhead, 0), MAX_QUICK_LOG_DAYS);
+  const oneTimeReminderSliderProgress = `${(oneTimeReminderSliderValue / MAX_QUICK_LOG_DAYS) * 100}%`;
+
+  const updateHistoryNotes = (id: string, notes: string) => {
+    const updatedHistory = formData.history.map((entry) => (
+      entry.id === id ? { ...entry, notes } : entry
+    ));
+    setFormData(syncLastContactDateFromHistory(formData, updatedHistory));
+  };
+
+  const updateHistoryDate = (id: string, value: string) => {
+    const updatedHistory = formData.history.map((entry) => (
+      entry.id === id ? { ...entry, date: getIsoFromDateInputValue(value) } : entry
+    ));
+    setFormData(syncLastContactDateFromHistory(formData, updatedHistory));
+  };
+
+  const removeHistoryEntry = (id: string) => {
+    const updatedHistory = formData.history.filter((entry) => entry.id !== id);
+    setFormData(syncLastContactDateFromHistory(formData, updatedHistory));
   };
 
   const handlePaste = async (e: React.ClipboardEvent) => {
@@ -432,15 +558,105 @@ export function ContactModal({ contact, isOpen, onClose, onSave, onDelete, allCo
 
                       <div className="grid grid-cols-1 md:grid-cols-2 gap-5">
                         <div className="space-y-1.5">
-                          <label className="text-[10px] uppercase tracking-wider font-bold text-[#a8a38d]">Reminder Interval (Days)</label>
-                          <input
-                            type="number"
-                            min="1"
-                            value={formData.reminderIntervalDays || ''}
-                            onChange={e => setFormData({ ...formData, reminderIntervalDays: e.target.value ? parseInt(e.target.value) : null })}
-                            className="w-full px-4 py-2.5 bg-[#f4f1e6] border border-transparent rounded-xl focus:bg-white focus:border-[#e0dbc5] focus:ring-4 focus:ring-[#5a5a40]/10 transition-all duration-300 outline-none text-[#4a453e] shadow-inner focus:shadow-sm text-sm"
-                            placeholder="Leave blank for none"
-                          />
+                          <label className="text-[10px] uppercase tracking-wider font-bold text-[#a8a38d]">Contact Reminder</label>
+                          <div className="flex bg-[#f4f1e6] rounded-xl p-1 border border-[#e0dbc5] shadow-inner">
+                            {[
+                              { id: 'none', label: 'None' },
+                              { id: 'recurring', label: 'Every' },
+                              { id: 'once', label: 'Once' },
+                            ].map((option) => (
+                              <button
+                                key={option.id}
+                                type="button"
+                                onClick={() => {
+                                  if (option.id === 'none') {
+                                    setFormData({
+                                      ...formData,
+                                      reminderIntervalDays: null,
+                                      oneTimeReminderDate: '',
+                                      oneTimeReminderCreatedDate: '',
+                                      lastReminderSentDate: '',
+                                    });
+                                  } else if (option.id === 'recurring') {
+                                    setFormData({
+                                      ...formData,
+                                      reminderIntervalDays: formData.reminderIntervalDays || 30,
+                                      oneTimeReminderDate: '',
+                                      oneTimeReminderCreatedDate: '',
+                                      lastReminderSentDate: '',
+                                    });
+                                  } else {
+                                    setFormData({
+                                      ...formData,
+                                      reminderIntervalDays: null,
+                                      oneTimeReminderDate: formData.oneTimeReminderDate || getIsoFromDateInputValue(getDaysFromNowDate(3)),
+                                      oneTimeReminderCreatedDate: formData.oneTimeReminderCreatedDate || new Date().toISOString(),
+                                      lastReminderSentDate: '',
+                                    });
+                                  }
+                                }}
+                                className={`flex-1 rounded-lg px-2 py-1.5 text-[10px] font-bold uppercase tracking-wider transition-colors ${reminderMode === option.id ? 'bg-white text-[#5a5a40] shadow-sm' : 'text-[#8e8a75] hover:text-[#4a453e]'}`}
+                              >
+                                {option.label}
+                              </button>
+                            ))}
+                          </div>
+
+                          {reminderMode === 'recurring' && (
+                            <div className="space-y-1.5">
+                              <input
+                                type="number"
+                                min="0"
+                                value={formData.reminderIntervalDays || ''}
+                                onChange={e => setFormData({
+                                  ...formData,
+                                  reminderIntervalDays: e.target.value ? parseInt(e.target.value, 10) : null,
+                                  oneTimeReminderDate: '',
+                                  oneTimeReminderCreatedDate: '',
+                                  lastReminderSentDate: '',
+                                })}
+                                className="w-full px-4 py-2.5 bg-[#f4f1e6] border border-transparent rounded-xl focus:bg-white focus:border-[#e0dbc5] focus:ring-4 focus:ring-[#5a5a40]/10 transition-all duration-300 outline-none text-[#4a453e] shadow-inner focus:shadow-sm text-sm"
+                                placeholder="Days"
+                              />
+                              <p className="text-xs text-[#8e8a75] px-1">{getContactEveryText(formData.reminderIntervalDays)}</p>
+                            </div>
+                          )}
+
+                          {reminderMode === 'once' && (
+                            <div className="space-y-2 rounded-xl border border-[#e0dbc5] bg-white p-3">
+                              <div className="flex items-center justify-between gap-3">
+                                <p className="text-sm font-serif text-[#4a453e] leading-tight">{getOneTimeReminderText(oneTimeReminderDaysAhead)}</p>
+                                <input
+                                  type="date"
+                                  value={oneTimeReminderInputValue}
+                                  onChange={(e) => setFormData({
+                                    ...formData,
+                                    reminderIntervalDays: null,
+                                    oneTimeReminderDate: getIsoFromDateInputValue(e.target.value),
+                                    oneTimeReminderCreatedDate: formData.oneTimeReminderCreatedDate || new Date().toISOString(),
+                                    lastReminderSentDate: '',
+                                  })}
+                                  className="bg-[#fbfaf5] border border-[#e0dbc5] rounded-xl px-3 py-1.5 text-xs text-[#4a453e] font-medium outline-none"
+                                />
+                              </div>
+                              <input
+                                type="range"
+                                min="1"
+                                max={MAX_QUICK_LOG_DAYS}
+                                value={oneTimeReminderSliderValue}
+                                onChange={(e) => setFormData({
+                                  ...formData,
+                                  reminderIntervalDays: null,
+                                  oneTimeReminderDate: getIsoFromDateInputValue(getDaysFromNowDate(parseInt(e.target.value, 10))),
+                                  oneTimeReminderCreatedDate: formData.oneTimeReminderCreatedDate || new Date().toISOString(),
+                                  lastReminderSentDate: '',
+                                })}
+                                className="days-ago-slider w-full"
+                                style={{ '--slider-progress': oneTimeReminderSliderProgress } as React.CSSProperties}
+                                aria-label="One-time reminder days"
+                              />
+                            </div>
+                          )}
                         </div>
                         <div className="space-y-1.5">
                           <label className="text-[10px] uppercase tracking-wider font-bold text-[#a8a38d]">LinkedIn Profile</label>
@@ -879,29 +1095,50 @@ export function ContactModal({ contact, isOpen, onClose, onSave, onDelete, allCo
                   >
                     <div className="bg-[#f4f1e6] p-5 rounded-2xl border border-[#e0dbc5] space-y-4">
                       <div className="flex items-center justify-between">
-                        <h3 className="text-[11px] uppercase tracking-wider font-bold text-[#a8a38d]">New Interaction</h3>
+                        <h3 className="text-[11px] uppercase tracking-wider font-bold text-[#a8a38d]">Log Contact</h3>
+                      </div>
+                      <div className="bg-white border border-[#e0dbc5] rounded-2xl p-4 space-y-3 shadow-sm">
+                        <div className="flex items-center justify-between gap-3">
+                          <div>
+                            <p className="text-[10px] uppercase tracking-wider font-bold text-[#a8a38d]">When</p>
+                            <p className="text-lg font-serif text-[#4a453e] leading-tight">{getDaysAgoLabel(interactionDaysAgo)}</p>
+                          </div>
+                          <input
+                            type="date"
+                            value={newInteractionDate}
+                            onChange={(e) => setNewInteractionDate(e.target.value)}
+                            className="bg-[#fbfaf5] border border-[#e0dbc5] rounded-xl px-3 py-1.5 text-xs text-[#4a453e] font-medium outline-none"
+                          />
+                        </div>
                         <input
-                          type="date"
-                          value={newInteractionDate}
-                          onChange={(e) => setNewInteractionDate(e.target.value)}
-                          className="bg-white border border-[#e0dbc5] rounded-xl px-3 py-1.5 text-xs text-[#4a453e] font-medium outline-none"
+                          type="range"
+                          min="0"
+                          max={MAX_QUICK_LOG_DAYS}
+                          value={sliderDaysAgo}
+                          onChange={(e) => setNewInteractionDate(getDaysAgoDate(parseInt(e.target.value, 10)))}
+                          className="days-ago-slider w-full"
+                          style={{ '--slider-progress': sliderProgress } as React.CSSProperties}
+                          aria-label="Days ago"
                         />
+                        <div className="flex items-center justify-between text-[10px] font-bold uppercase tracking-wider text-[#a8a38d]">
+                          <span>Today</span>
+                          <span>{MAX_QUICK_LOG_DAYS} days ago</span>
+                        </div>
                       </div>
                       <AutoResizeTextarea
                         value={newInteractionNotes}
                         onChange={(e) => setNewInteractionNotes(e.target.value)}
-                        placeholder="What did you talk about?"
+                        placeholder="Add notes if you want..."
                         rows={2}
                         className="w-full text-sm px-4 py-3 bg-white border border-[#e0dbc5] rounded-xl text-[#4a453e] placeholder:text-[#a8a38d] outline-none resize-none focus:ring-4 focus:ring-[#5a5a40]/10 transition-all"
                       />
-                      <div className="flex justify-end">
+                      <div className="flex justify-end items-center gap-3">
                         <button 
                           type="button" 
                           onClick={handleAddInteraction}
-                          disabled={!newInteractionNotes.trim()}
-                          className="text-white bg-[#5a5a40] hover:bg-[#4a4a34] disabled:bg-[#a8a38d] disabled:cursor-not-allowed px-5 py-2 rounded-full flex items-center gap-2 text-[11px] uppercase font-bold tracking-wider transition-colors shadow-sm"
+                          className="text-white bg-[#5a5a40] hover:bg-[#4a4a34] px-5 py-2 rounded-full flex items-center gap-2 text-[11px] uppercase font-bold tracking-wider transition-colors shadow-sm"
                         >
-                          <Plus size={14} /> Log It
+                          <Plus size={14} /> Log Contact
                         </button>
                       </div>
                     </div>
@@ -914,21 +1151,22 @@ export function ContactModal({ contact, isOpen, onClose, onSave, onDelete, allCo
                       </div>
                     ) : (
                       <div className="space-y-4">
-                        {formData.history.map((hist, i) => (
+                        {formData.history.map((hist) => (
                           <motion.div initial={{ opacity: 0, y: 10 }} animate={{ opacity: 1, y: 0 }} key={hist.id} className="bg-white p-5 rounded-2xl shadow-sm border border-[#e0dbc5] flex flex-col gap-3 group relative">
-                            <div className="flex justify-between items-center">
-                              <span className="text-[11px] font-bold tracking-wider uppercase text-[#a8a38d]">{new Date(hist.date).toLocaleDateString(undefined, { weekday: 'long', year: 'numeric', month: 'long', day: 'numeric' })}</span>
-                              <button type="button" onClick={() => {
-                                const newHist = [...formData.history];
-                                newHist.splice(i, 1);
-                                setFormData({ ...formData, history: newHist });
-                              }} className="text-[#8e8a75] hover:text-[#e67e5a] opacity-0 group-hover:opacity-100 transition-opacity">
+                            <div className="flex flex-col sm:flex-row sm:items-center justify-between gap-2">
+                              <input
+                                type="date"
+                                value={getHistoryDateInputValue(hist.date)}
+                                onChange={(e) => updateHistoryDate(hist.id, e.target.value)}
+                                className="w-fit bg-[#fbfaf5] border border-[#e0dbc5] rounded-xl px-3 py-1.5 text-[11px] font-bold tracking-wider uppercase text-[#8e8a75] outline-none focus:bg-white focus:ring-4 focus:ring-[#5a5a40]/10 transition-all"
+                              />
+                              <button type="button" onClick={() => removeHistoryEntry(hist.id)} className="self-end sm:self-auto text-[#8e8a75] hover:text-[#e67e5a] opacity-0 group-hover:opacity-100 transition-opacity">
                                 <Trash2 size={16} />
                               </button>
                             </div>
                             <AutoResizeTextarea
                               value={hist.notes}
-                              onChange={e => updateHistory(i, e.target.value)}
+                              onChange={e => updateHistoryNotes(hist.id, e.target.value)}
                               placeholder="What did you talk about?"
                               rows={2}
                               className="w-full text-sm text-[#4a453e] placeholder:text-[#a8a38d] outline-none resize-none bg-transparent"

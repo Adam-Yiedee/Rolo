@@ -20,5 +20,40 @@
   .custom-scrollbar::-webkit-scrollbar-thumb:hover {
     background: #d0cdc1;
   }
+
+  .days-ago-slider {
+    appearance: none;
+    height: 6px;
+    border-radius: 999px;
+    background: linear-gradient(
+      to right,
+      #8e8a75 0%,
+      #8e8a75 var(--slider-progress),
+      #e0dbc5 var(--slider-progress),
+      #e0dbc5 100%
+    );
+    outline: none;
+  }
+
+  .days-ago-slider::-webkit-slider-thumb {
+    appearance: none;
+    width: 20px;
+    height: 20px;
+    border-radius: 999px;
+    background: #fbfaf5;
+    border: 2px solid #5a5a40;
+    box-shadow: 0 2px 8px rgb(74 69 62 / 0.18);
+    cursor: pointer;
+  }
+
+  .days-ago-slider::-moz-range-thumb {
+    width: 18px;
+    height: 18px;
+    border-radius: 999px;
+    background: #fbfaf5;
+    border: 2px solid #5a5a40;
+    box-shadow: 0 2px 8px rgb(74 69 62 / 0.18);
+    cursor: pointer;
+  }
 }
 

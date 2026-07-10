@@ -1,6 +1,6 @@
 import React, { useState } from 'react';
 import { Contact } from '../lib/sheets';
-import { formatDistanceToNow, parseISO } from 'date-fns';
+import { format, formatDistanceToNow, parseISO } from 'date-fns';
 import { UserRound, Heart, Clock, Plus, Tag, ChevronDown, ChevronUp } from 'lucide-react';
 import { motion, AnimatePresence } from 'motion/react';
 
@@ -40,12 +40,21 @@ const getInitials = (name: string) => {
 export function ContactCard({ contact, onClick, onLogContact }: ContactCardProps) {
   const [isExpanded, setIsExpanded] = useState(false);
 
+  const hasOneTimeReminder = Boolean(contact.oneTimeReminderDate);
   let lastContactStr = 'Never';
   if (contact.lastContactDate) {
     try {
       lastContactStr = formatDistanceToNow(parseISO(contact.lastContactDate), { addSuffix: true });
     } catch (e) {
       // Ignore parse error
+    }
+  }
+  let oneTimeReminderStr = '';
+  if (contact.oneTimeReminderDate) {
+    try {
+      oneTimeReminderStr = format(parseISO(contact.oneTimeReminderDate), 'MMM d');
+    } catch (e) {
+      oneTimeReminderStr = 'set';
     }
   }
 
@@ -55,16 +64,16 @@ export function ContactCard({ contact, onClick, onLogContact }: ContactCardProps
   return (
     <motion.div 
       whileHover={{ y: -2, transition: { duration: 0.2, ease: 'easeOut' } }}
-      className="bg-white rounded-[24px] shadow-sm hover:shadow-md border border-[#e0dbc5] flex flex-col group"
+      className="bg-white rounded-[18px] shadow-sm hover:shadow-md border border-[#e0dbc5] flex flex-col group"
     >
       <div 
-        className="flex items-center gap-4 p-4 cursor-pointer"
+        className="flex items-center gap-3 px-4 py-3 cursor-pointer"
         onClick={onClick}
       >
         {contact.profilePicture ? (
-          <img src={contact.profilePicture} alt={contact.name} className="w-12 h-12 rounded-full object-cover bg-[#e8e4d3] shrink-0 border border-[#e0dbc5] shadow-sm" />
+          <img src={contact.profilePicture} alt={contact.name} className="w-11 h-11 rounded-full object-cover bg-[#e8e4d3] shrink-0 border border-[#e0dbc5] shadow-sm" />
         ) : (
-          <div className={`w-12 h-12 rounded-full flex items-center justify-center shrink-0 border border-[#e0dbc5] shadow-sm font-serif text-lg tracking-wide ${avatarColorClass}`}>
+          <div className={`w-11 h-11 rounded-full flex items-center justify-center shrink-0 border border-[#e0dbc5] shadow-sm font-serif text-base tracking-wide ${avatarColorClass}`}>
             {getInitials(contact.name)}
           </div>
         )}
@@ -85,9 +94,9 @@ export function ContactCard({ contact, onClick, onLogContact }: ContactCardProps
             </div>
             
             <div className="flex flex-col sm:flex-row sm:items-center gap-1 sm:gap-4 mt-0.5">
-              {contact.reminderIntervalDays && contact.reminderIntervalDays > 0 && (
+              {(hasOneTimeReminder || (contact.reminderIntervalDays && contact.reminderIntervalDays > 0)) && (
                 <p className="text-[11px] text-[#8e8a75] flex items-center gap-1 font-medium tracking-wide uppercase">
-                  <Clock size={10} strokeWidth={2.5} /> Last: {lastContactStr}
+                  <Clock size={10} strokeWidth={2.5} /> {hasOneTimeReminder ? `Once: ${oneTimeReminderStr}` : `Last: ${lastContactStr}`}
                 </p>
               )}
               {contact.interests && (
@@ -106,9 +115,9 @@ export function ContactCard({ contact, onClick, onLogContact }: ContactCardProps
               onLogContact();
             }}
             title="Log Interaction"
-            className="w-10 h-10 rounded-full bg-[#f4f1e6] hover:bg-[#5a5a40] text-[#8e8a75] hover:text-white flex items-center justify-center transition-all duration-300 shadow-sm"
+            className="w-9 h-9 rounded-full bg-[#f4f1e6] hover:bg-[#5a5a40] text-[#8e8a75] hover:text-white flex items-center justify-center transition-all duration-300 shadow-sm"
           >
-            <Plus size={18} strokeWidth={2.5} />
+            <Plus size={17} strokeWidth={2.5} />
           </button>
           
           <button
@@ -116,9 +125,9 @@ export function ContactCard({ contact, onClick, onLogContact }: ContactCardProps
               e.stopPropagation();
               setIsExpanded(!isExpanded);
             }}
-            className="w-10 h-10 rounded-full hover:bg-[#f4f1e6] text-[#8e8a75] flex items-center justify-center transition-all duration-300"
+            className="w-9 h-9 rounded-full hover:bg-[#f4f1e6] text-[#8e8a75] flex items-center justify-center transition-all duration-300"
           >
-            {isExpanded ? <ChevronUp size={20} /> : <ChevronDown size={20} />}
+            {isExpanded ? <ChevronUp size={19} /> : <ChevronDown size={19} />}
           </button>
         </div>
       </div>
@@ -132,8 +141,8 @@ export function ContactCard({ contact, onClick, onLogContact }: ContactCardProps
             transition={{ duration: 0.3 }}
             className="overflow-hidden"
           >
-            <div className="px-16 pb-5 pt-2 text-[13px] text-[#6d6858] leading-relaxed border-t border-[#f0eee0] bg-[#fbfaf5]/50 rounded-b-[24px]">
-              <div className="flex sm:hidden flex-wrap gap-1.5 mb-4">
+            <div className="px-14 pb-4 pt-2 text-[13px] text-[#6d6858] leading-relaxed border-t border-[#f0eee0] bg-[#fbfaf5]/50 rounded-b-[18px]">
+              <div className="flex sm:hidden flex-wrap gap-1.5 mb-3">
                 {(contact.categories || []).map(cat => (
                   <span key={cat} className={`inline-flex items-center px-2 py-0.5 rounded-full text-[10px] font-bold tracking-wide uppercase ${getCategoryColor(cat)}`}>
                     {cat}
@@ -141,14 +150,19 @@ export function ContactCard({ contact, onClick, onLogContact }: ContactCardProps
                 ))}
               </div>
               
-              <div className="grid grid-cols-1 md:grid-cols-2 gap-6">
+              <div className="grid grid-cols-1 md:grid-cols-2 gap-5">
                 <div>
                   <h4 className="text-[10px] font-bold uppercase tracking-wider text-[#a8a38d] mb-1">Notes</h4>
                   <p className="whitespace-pre-wrap">{contact.notes || 'No notes added.'}</p>
                 </div>
                 
                 <div className="space-y-4">
-                  {contact.reminderIntervalDays && contact.reminderIntervalDays > 0 ? (
+                  {hasOneTimeReminder ? (
+                    <div>
+                      <h4 className="text-[10px] font-bold uppercase tracking-wider text-[#a8a38d] mb-1">Reach Out Reminder</h4>
+                      <p>One time on {oneTimeReminderStr}</p>
+                    </div>
+                  ) : contact.reminderIntervalDays && contact.reminderIntervalDays > 0 ? (
                     <div>
                       <h4 className="text-[10px] font-bold uppercase tracking-wider text-[#a8a38d] mb-1">Reach Out Reminder</h4>
                       <p>Every {contact.reminderIntervalDays} days</p>
