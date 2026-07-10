@@ -57,6 +57,8 @@ export function ContactCard({ contact, onClick, onLogContact }: ContactCardProps
       oneTimeReminderStr = 'set';
     }
   }
+  const hasReminder = hasOneTimeReminder || Boolean(contact.reminderIntervalDays && contact.reminderIntervalDays > 0);
+  const reminderLabel = hasOneTimeReminder ? `Once: ${oneTimeReminderStr}` : `Last: ${lastContactStr}`;
 
   const primaryCategory = contact.categories && contact.categories.length > 0 ? contact.categories[0] : null;
   const avatarColorClass = primaryCategory ? getCategoryColor(primaryCategory) : 'bg-[#f4f1e6] text-[#8e8a75]';
@@ -99,9 +101,9 @@ export function ContactCard({ contact, onClick, onLogContact }: ContactCardProps
                   <Heart size={10} strokeWidth={2.5} /> {contact.interests}
                 </p>
               )}
-              {(hasOneTimeReminder || (contact.reminderIntervalDays && contact.reminderIntervalDays > 0)) && (
-                <p className="text-[11px] text-[#8e8a75] flex items-center gap-1 font-medium tracking-wide uppercase">
-                  <Clock size={10} strokeWidth={2.5} /> {hasOneTimeReminder ? `Once: ${oneTimeReminderStr}` : `Last: ${lastContactStr}`}
+              {hasReminder && (
+                <p className="text-[11px] text-[#8e8a75] flex sm:hidden items-center gap-1 font-medium tracking-wide uppercase">
+                  <Clock size={10} strokeWidth={2.5} /> {reminderLabel}
                 </p>
               )}
             </div>
@@ -109,6 +111,11 @@ export function ContactCard({ contact, onClick, onLogContact }: ContactCardProps
         </div>
 
         <div className="flex items-center gap-2 shrink-0">
+          {hasReminder && (
+            <p className="hidden sm:flex items-center gap-1 text-[11px] text-[#8e8a75] font-medium tracking-wide uppercase whitespace-nowrap pr-1">
+              <Clock size={10} strokeWidth={2.5} /> {reminderLabel}
+            </p>
+          )}
           <button
             onClick={(e) => {
               e.stopPropagation();
