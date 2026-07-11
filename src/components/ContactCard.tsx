@@ -66,16 +66,16 @@ export function ContactCard({ contact, onClick, onLogContact }: ContactCardProps
   return (
     <motion.div 
       whileHover={{ y: -2, transition: { duration: 0.2, ease: 'easeOut' } }}
-      className="bg-white rounded-[18px] shadow-sm hover:shadow-md border border-[#e0dbc5] flex flex-col group"
+      className="bg-white rounded-[18px] shadow-sm hover:shadow-md border border-[#e0dbc5] flex flex-col group max-sm:rounded-2xl"
     >
       <div 
-        className="flex items-center gap-3 px-4 py-3 cursor-pointer"
+        className="flex items-center gap-3 px-4 py-3 cursor-pointer max-sm:gap-2.5 max-sm:px-3 max-sm:py-2.5"
         onClick={onClick}
       >
         {contact.profilePicture ? (
-          <img src={contact.profilePicture} alt={contact.name} className="w-11 h-11 rounded-full object-cover bg-[#e8e4d3] shrink-0 border border-[#e0dbc5] shadow-sm" />
+          <img src={contact.profilePicture} alt={contact.name} className="w-11 h-11 rounded-full object-cover bg-[#e8e4d3] shrink-0 border border-[#e0dbc5] shadow-sm max-sm:w-10 max-sm:h-10" />
         ) : (
-          <div className={`w-11 h-11 rounded-full flex items-center justify-center shrink-0 border border-[#e0dbc5] shadow-sm font-serif text-base tracking-wide ${avatarColorClass}`}>
+          <div className={`w-11 h-11 rounded-full flex items-center justify-center shrink-0 border border-[#e0dbc5] shadow-sm font-serif text-base tracking-wide max-sm:w-10 max-sm:h-10 max-sm:text-sm ${avatarColorClass}`}>
             {getInitials(contact.name)}
           </div>
         )}
@@ -83,7 +83,7 @@ export function ContactCard({ contact, onClick, onLogContact }: ContactCardProps
         <div className="flex-1 min-w-0 flex flex-col sm:flex-row sm:items-center justify-between gap-2">
           <div className="flex-1 min-w-0">
             <div className="flex items-center gap-3">
-              <p className="text-[15px] font-bold text-[#4a453e] truncate">{contact.name}</p>
+              <p className="text-[15px] font-bold text-[#4a453e] truncate max-sm:text-sm">{contact.name}</p>
               {contact.categories && contact.categories.length > 0 && (
                 <div className="hidden sm:flex flex-wrap gap-1.5">
                   {contact.categories.map(cat => (
@@ -95,9 +95,9 @@ export function ContactCard({ contact, onClick, onLogContact }: ContactCardProps
               )}
             </div>
             
-            <div className="flex flex-col sm:flex-row sm:items-center gap-1 sm:gap-4 mt-0.5">
+            <div className="flex flex-col sm:flex-row sm:items-center gap-1 sm:gap-4 mt-0.5 max-sm:mt-0">
               {contact.interests && (
-                <p className="text-[11px] text-[#a8a38d] flex items-center gap-1 truncate max-w-xs">
+                <p className="text-[11px] text-[#a8a38d] flex items-center gap-1 truncate max-w-xs max-sm:max-w-[46vw]">
                   <Heart size={10} strokeWidth={2.5} /> {contact.interests}
                 </p>
               )}
@@ -110,7 +110,7 @@ export function ContactCard({ contact, onClick, onLogContact }: ContactCardProps
           </div>
         </div>
 
-        <div className="flex items-center gap-2 shrink-0">
+        <div className="flex items-center gap-2 shrink-0 max-sm:gap-1">
           {hasReminder && (
             <p className="hidden sm:flex items-center gap-1 text-[11px] text-[#8e8a75] font-medium tracking-wide uppercase whitespace-nowrap pr-1">
               <Clock size={10} strokeWidth={2.5} /> {reminderLabel}
@@ -122,7 +122,7 @@ export function ContactCard({ contact, onClick, onLogContact }: ContactCardProps
               onLogContact();
             }}
             title="Log Interaction"
-            className="w-9 h-9 rounded-full bg-[#f4f1e6] hover:bg-[#5a5a40] text-[#8e8a75] hover:text-white flex items-center justify-center transition-all duration-300 shadow-sm"
+            className="w-9 h-9 rounded-full bg-[#f4f1e6] hover:bg-[#5a5a40] text-[#8e8a75] hover:text-white flex items-center justify-center transition-all duration-300 shadow-sm max-sm:w-8 max-sm:h-8"
           >
             <Plus size={17} strokeWidth={2.5} />
           </button>
@@ -132,7 +132,7 @@ export function ContactCard({ contact, onClick, onLogContact }: ContactCardProps
               e.stopPropagation();
               setIsExpanded(!isExpanded);
             }}
-            className="w-9 h-9 rounded-full hover:bg-[#f4f1e6] text-[#8e8a75] flex items-center justify-center transition-all duration-300"
+            className="w-9 h-9 rounded-full hover:bg-[#f4f1e6] text-[#8e8a75] flex items-center justify-center transition-all duration-300 max-sm:w-8 max-sm:h-8"
           >
             {isExpanded ? <ChevronUp size={19} /> : <ChevronDown size={19} />}
           </button>

@@ -1,4 +1,4 @@
-import React, { useState, useEffect } from 'react';
+import React, { useState, useEffect, useRef } from 'react';
 import { AuthScreen } from './components/AuthScreen';
 import { ContactCard } from './components/ContactCard';
 import { ContactModal } from './components/ContactModal';
@@ -22,7 +22,7 @@ import {
   renderReminderTaskTemplate,
 } from './lib/googleTasks';
 import { addDays, differenceInDays, parseISO } from 'date-fns';
-import { Bug, Copy, ListTodo, LogOut, Mail, Plus, RotateCcw, Save, Search, Send, Loader2, UserRound, LayoutGrid, Network, Settings, X } from 'lucide-react';
+import { Bug, CheckCircle2, Copy, ListTodo, LogOut, Mail, Plus, RotateCcw, Save, Search, Send, Loader2, Sparkles, UserRound, LayoutGrid, Network, Settings, X } from 'lucide-react';
 import { motion, AnimatePresence } from 'motion/react';
 
 export default function App() {
@@ -60,6 +60,9 @@ export default function App() {
   const [modalInitialTab, setModalInitialTab] = useState<'details' | 'history'>('details');
   
   const [loading, setLoading] = useState(false);
+  const [isMobileViewport, setIsMobileViewport] = useState(false);
+  const [goalCelebration, setGoalCelebration] = useState<{ id: number; contactName: string } | null>(null);
+  const celebrationTimeoutRef = useRef<number | null>(null);
 
   const openContactModal = (contact: Contact | null, tab: 'details' | 'history' = 'details') => {
     setSelectedContact(contact);
@@ -86,6 +89,22 @@ export default function App() {
       }
     );
     return () => unsubscribe();
+  }, []);
+
+  useEffect(() => {
+    const mediaQuery = window.matchMedia('(max-width: 639px)');
+    const syncViewport = () => setIsMobileViewport(mediaQuery.matches);
+    syncViewport();
+    mediaQuery.addEventListener('change', syncViewport);
+    return () => mediaQuery.removeEventListener('change', syncViewport);
+  }, []);
+
+  useEffect(() => {
+    return () => {
+      if (celebrationTimeoutRef.current) {
+        window.clearTimeout(celebrationTimeoutRef.current);
+      }
+    };
   }, []);
 
   const handleLogin = async () => {
@@ -429,6 +448,22 @@ export default function App() {
     }
   };
 
+  const triggerGoalCelebration = (contactName: string) => {
+    if (celebrationTimeoutRef.current) {
+      window.clearTimeout(celebrationTimeoutRef.current);
+    }
+
+    setGoalCelebration({
+      id: Date.now(),
+      contactName,
+    });
+
+    celebrationTimeoutRef.current = window.setTimeout(() => {
+      setGoalCelebration(null);
+      celebrationTimeoutRef.current = null;
+    }, 2800);
+  };
+
   const handleSaveContact = async (contact: Contact) => {
     if (!spreadsheetId) {
       alert("Error: Spreadsheet not connected. Please refresh or check your Google Sheets API setup.");
@@ -443,6 +478,12 @@ export default function App() {
     setLoading(true);
     try {
       const isExisting = contacts.some(c => c.id === contact.id);
+      const previousContact = contacts.find(c => c.id === contact.id);
+      const didLogInteraction = Boolean(
+        previousContact
+        && (contact.history?.length || 0) > (previousContact.history?.length || 0),
+      );
+      const metContactGoal = Boolean(previousContact && didLogInteraction && hasContactReminder(previousContact));
       let newContacts = [];
       if (isExisting) {
         newContacts = contacts.map(c => c.id === contact.id ? contact : c);
@@ -468,6 +509,9 @@ export default function App() {
       setContacts(newContacts);
       setIsModalOpen(false);
       setSelectedContact(null);
+      if (metContactGoal) {
+        triggerGoalCelebration(contact.name);
+      }
     } catch (err) {
       console.error('Failed to save contact:', err);
       alert('Failed to save contact. Please try again.');
@@ -784,18 +828,18 @@ export default function App() {
   });
 
   return (
-    <div className="min-h-screen bg-[#fbfaf5] text-[#4a453e] font-sans flex flex-col h-screen overflow-hidden">
-      <header className="h-20 bg-[#fbfaf5]/80 backdrop-blur-md border-b border-[#f0eee0] shrink-0 z-20 sticky top-0 transition-all duration-300">
-        <div className="max-w-7xl mx-auto px-6 h-full flex items-center justify-between">
+    <div className="min-h-screen bg-[#fbfaf5] text-[#4a453e] font-sans flex flex-col h-screen overflow-hidden max-sm:h-[100dvh]">
+      <header className="h-20 bg-[#fbfaf5]/80 backdrop-blur-md border-b border-[#f0eee0] shrink-0 z-20 sticky top-0 transition-all duration-300 max-sm:h-16">
+        <div className="max-w-7xl mx-auto px-6 h-full flex items-center justify-between max-sm:px-3">
           <div className="flex items-center gap-3">
-            <h1 className="text-2xl font-serif italic text-[#5a5a40] tracking-tight">Roldex</h1>
+            <h1 className="text-2xl font-serif italic text-[#5a5a40] tracking-tight max-sm:text-xl">Roldex</h1>
           </div>
           
-          <div className="flex items-center gap-4">
+          <div className="flex items-center gap-4 max-sm:gap-2">
             {loading && <Loader2 className="w-5 h-5 animate-spin text-[#8e8a75]" />}
             
             <motion.div 
-              className="relative flex items-center group bg-[#f4f1e6] border border-[#e0dbc5] shadow-inner overflow-hidden"
+              className="relative flex items-center group bg-[#f4f1e6] border border-[#e0dbc5] shadow-inner overflow-hidden max-sm:max-w-[46vw]"
               initial={false}
               animate={{
                 width: (isSearchExpanded || searchTerm) ? 220 : 40,
@@ -825,7 +869,7 @@ export default function App() {
               <Settings size={20} />
             </button>
             {user?.photoURL && (
-              <img src={user.photoURL} alt="Profile" className="w-8 h-8 rounded-full border border-[#e0dbc5]" />
+              <img src={user.photoURL} alt="Profile" className="w-8 h-8 rounded-full border border-[#e0dbc5] max-sm:hidden" />
             )}
             <button
               onClick={logout}
@@ -838,22 +882,23 @@ export default function App() {
         </div>
       </header>
 
-      <main className="max-w-7xl mx-auto px-6 flex-1 w-full flex flex-col pt-8 pb-4 min-h-0">
-        <div className="flex flex-col sm:flex-row sm:items-center justify-between gap-4 mb-4 shrink-0">
-          <div className="flex-1 flex items-center gap-4">
+      <main className="max-w-7xl mx-auto px-6 flex-1 w-full flex flex-col pt-8 pb-4 min-h-0 max-sm:px-3 max-sm:pt-4 max-sm:pb-3">
+        <div className="flex flex-col sm:flex-row sm:items-center justify-between gap-4 mb-4 shrink-0 max-sm:gap-3 max-sm:mb-3">
+          <div className="flex-1 flex items-center gap-4 max-sm:w-full">
             <motion.div 
               layout
-              className="flex items-center bg-[#f4f1e6] rounded-full p-1 border border-[#e0dbc5] shadow-inner relative overflow-hidden inline-flex"
+              className="flex items-center bg-[#f4f1e6] rounded-full p-1 border border-[#e0dbc5] shadow-inner relative overflow-hidden inline-flex max-sm:w-full max-sm:justify-between"
               onMouseEnter={() => setIsHoveringSort(true)}
               onMouseLeave={() => setIsHoveringSort(false)}
               style={{ borderRadius: 9999 }}
             >
               <AnimatePresence initial={false} mode="popLayout">
                 {(['name', 'recent', 'goals', 'categories'] as const).map(mode => {
-                  if (!isHoveringSort && sortBy !== mode) return null;
+                  if (!isMobileViewport && !isHoveringSort && sortBy !== mode) return null;
                   return (
                     <motion.div
                       layout
+                      className="max-sm:flex-1"
                       initial={{ opacity: 0, scale: 0.8 }}
                       animate={{ opacity: 1, scale: 1 }}
                       exit={{ opacity: 0, scale: 0.8 }}
@@ -862,7 +907,7 @@ export default function App() {
                     >
                       <button
                         onClick={() => setSortBy(mode)}
-                        className={`relative py-1.5 px-4 mx-0.5 text-xs font-bold uppercase tracking-wider rounded-full whitespace-nowrap block outline-none ${sortBy === mode ? 'text-[#5a5a40]' : 'text-[#a8a38d] hover:text-[#4a453e]'}`}
+                        className={`relative py-1.5 px-4 mx-0.5 text-xs font-bold uppercase tracking-wider rounded-full whitespace-nowrap block outline-none max-sm:flex-1 max-sm:px-3 max-sm:text-[11px] ${sortBy === mode ? 'text-[#5a5a40]' : 'text-[#a8a38d] hover:text-[#4a453e]'}`}
                       >
                         {sortBy === mode && (
                           <motion.div
@@ -882,12 +927,12 @@ export default function App() {
               </AnimatePresence>
             </motion.div>
           </div>
-          <div className="flex items-center gap-3">
+          <div className="flex items-center gap-3 max-sm:w-full">
             <motion.button
               whileHover={{ scale: 1.02, transition: { duration: 0.2 } }}
               whileTap={{ scale: 0.98 }}
               onClick={() => openContactModal(null, 'details')}
-              className="flex items-center justify-center gap-2 px-6 py-2.5 bg-[#5a5a40] hover:bg-[#4a4a34] text-[#fbfaf5] text-sm font-medium rounded-full shadow-md hover:shadow-lg transition-colors duration-300 whitespace-nowrap"
+              className="flex items-center justify-center gap-2 px-6 py-2.5 bg-[#5a5a40] hover:bg-[#4a4a34] text-[#fbfaf5] text-sm font-medium rounded-full shadow-md hover:shadow-lg transition-colors duration-300 whitespace-nowrap max-sm:w-full max-sm:py-2.5"
             >
               <Plus size={18} />
               New Connection
@@ -896,7 +941,7 @@ export default function App() {
         </div>
 
         {sortBy === 'categories' && allCategories.length > 0 && (
-          <div className="flex flex-wrap gap-2 mb-6 shrink-0">
+          <div className="flex flex-wrap gap-2 mb-6 shrink-0 max-sm:mb-3 max-sm:max-h-20 max-sm:overflow-y-auto custom-scrollbar">
             <button
               onClick={() => setSelectedCategory(null)}
               className={`px-3 py-1 rounded-full text-[11px] font-bold tracking-wide uppercase transition-all duration-300 hover:-translate-y-0.5 ${selectedCategory === null ? 'bg-[#5a5a40] text-white shadow-sm' : 'bg-transparent border border-[#e0dbc5] text-[#8e8a75] hover:bg-[#e8e4d3] hover:shadow-sm'}`}
@@ -917,7 +962,7 @@ export default function App() {
 
         <div className="flex-1 min-h-0 relative">
           {contacts.length === 0 && !loading ? (
-            <div className="text-center py-20 bg-[#f9f8f3] rounded-[32px] border border-dashed border-[#d0cdc1] flex flex-col items-center justify-center h-full">
+            <div className="text-center py-20 bg-[#f9f8f3] rounded-[32px] border border-dashed border-[#d0cdc1] flex flex-col items-center justify-center h-full max-sm:rounded-2xl max-sm:px-5 max-sm:py-10">
               <div className="w-16 h-16 bg-[#e8e4d3] rounded-full flex items-center justify-center mx-auto mb-4">
                 <UserRound className="text-[#8e8a75]" size={32} />
               </div>
@@ -944,7 +989,7 @@ export default function App() {
               }}
             />
           ) : sortBy === 'goals' ? (
-            <div className="h-full pb-6">
+            <div className="h-full pb-6 max-sm:pb-3">
               <GoalsDashboard 
                 contacts={filteredContacts} 
                 onLogContact={(c) => openContactModal(c, 'history')} 
@@ -952,7 +997,7 @@ export default function App() {
               />
             </div>
           ) : (
-            <div className="flex flex-col gap-3 overflow-y-scroll pb-6 pt-1 px-2 -mx-2 h-full content-start custom-scrollbar">
+            <div className="flex flex-col gap-3 overflow-y-scroll pb-6 pt-1 px-2 -mx-2 h-full content-start custom-scrollbar max-sm:gap-2 max-sm:px-1 max-sm:-mx-1 max-sm:pb-4">
               {filteredContacts.map(contact => (
                 <ContactCard
                   key={contact.id}
@@ -966,15 +1011,15 @@ export default function App() {
         </div>
         
         {contacts.length > 0 && (
-          <div className="shrink-0 pt-6 mt-auto">
-            <div className="flex items-center gap-6">
+          <div className="shrink-0 pt-6 mt-auto max-sm:pt-3">
+            <div className="flex items-center gap-6 max-sm:flex-wrap max-sm:gap-3">
               <div className="flex items-baseline gap-2">
-                <span className="text-2xl font-serif text-[#4a453e]">{contacts.length}</span>
+                <span className="text-2xl font-serif text-[#4a453e] max-sm:text-xl">{contacts.length}</span>
                 <span className="text-[11px] uppercase tracking-wider font-bold text-[#a8a38d]">Total Connections</span>
               </div>
               <div className="h-6 w-px bg-[#e0dbc5]"></div>
               <div className="flex items-baseline gap-2">
-                <span className={`text-2xl font-serif ${overdueCount > 0 ? 'text-[#e67e5a]' : 'text-[#4a453e]'}`}>{overdueCount}</span>
+                <span className={`text-2xl font-serif max-sm:text-xl ${overdueCount > 0 ? 'text-[#e67e5a]' : 'text-[#4a453e]'}`}>{overdueCount}</span>
                 <span className={`text-[11px] uppercase tracking-wider font-bold ${overdueCount > 0 ? 'text-[#e67e5a]' : 'text-[#a8a38d]'}`}>Overdue Catch-ups</span>
               </div>
             </div>
@@ -993,14 +1038,55 @@ export default function App() {
       />
 
       <AnimatePresence>
+        {goalCelebration && (
+          <motion.div
+            key={goalCelebration.id}
+            initial={{ opacity: 0, y: 24, x: '-50%', scale: 0.96 }}
+            animate={{ opacity: 1, y: 0, x: '-50%', scale: 1 }}
+            exit={{ opacity: 0, y: 18, x: '-50%', scale: 0.98 }}
+            transition={{ duration: 0.28, ease: 'easeOut' }}
+            className="pointer-events-none fixed bottom-8 left-1/2 z-[60] max-sm:bottom-4 max-sm:w-[calc(100%-2rem)]"
+          >
+            <div className="relative overflow-hidden rounded-full border border-[#d4dcc6] bg-white/95 px-4 py-3 shadow-lg backdrop-blur-md max-sm:rounded-2xl">
+              <motion.div
+                className="absolute inset-0 rounded-full border border-[#9eb391]/40"
+                initial={{ scale: 0.9, opacity: 0.35 }}
+                animate={{ scale: 1.18, opacity: 0 }}
+                transition={{ duration: 1.2, repeat: 1, ease: 'easeOut' }}
+              />
+              <div className="relative flex items-center gap-3">
+                <motion.div
+                  initial={{ scale: 0.7, rotate: -12 }}
+                  animate={{ scale: 1, rotate: 0 }}
+                  transition={{ type: 'spring', stiffness: 420, damping: 22 }}
+                  className="flex h-10 w-10 items-center justify-center rounded-full bg-[#e4eee0] text-[#536b4d] shadow-sm"
+                >
+                  <CheckCircle2 size={21} strokeWidth={2.4} />
+                </motion.div>
+                <div className="min-w-0">
+                  <div className="flex items-center gap-1.5">
+                    <p className="text-sm font-bold text-[#4a453e]">Contact Logged!</p>
+                    <Sparkles size={13} className="text-[#8e8a75]" />
+                  </div>
+                  <p className="truncate text-xs text-[#8e8a75]">
+                    Goal reset for {goalCelebration.contactName}
+                  </p>
+                </div>
+              </div>
+            </div>
+          </motion.div>
+        )}
+      </AnimatePresence>
+
+      <AnimatePresence>
         {isSettingsOpen && (
-          <div className="fixed inset-0 z-50 flex items-center justify-center p-4 bg-black/40 backdrop-blur-md">
+          <div className="fixed inset-0 z-50 flex items-center justify-center p-4 bg-black/40 backdrop-blur-md max-sm:p-2">
             <motion.div 
               initial={{ opacity: 0, scale: 0.95 }}
               animate={{ opacity: 1, scale: 1 }}
               exit={{ opacity: 0, scale: 0.95 }}
               transition={{ duration: 0.2 }}
-              className="bg-[#fbfaf5] rounded-[24px] shadow-2xl w-full max-w-xl overflow-hidden border border-[#e0dbc5] p-6 relative max-h-[90vh] flex flex-col"
+              className="bg-[#fbfaf5] rounded-[24px] shadow-2xl w-full max-w-xl overflow-hidden border border-[#e0dbc5] p-6 relative max-h-[90vh] flex flex-col max-sm:max-h-[96dvh] max-sm:p-4"
             >
               <button 
                 onClick={() => setIsSettingsOpen(false)} 
@@ -1009,9 +1095,9 @@ export default function App() {
                 <X size={20} />
               </button>
               
-              <h2 className="text-2xl font-serif text-[#4a453e] mb-6 shrink-0">Settings</h2>
+              <h2 className="text-2xl font-serif text-[#4a453e] mb-6 shrink-0 max-sm:mb-4 max-sm:text-xl">Settings</h2>
               
-              <div className="space-y-4 overflow-y-auto custom-scrollbar pr-1 -mr-1">
+              <div className="space-y-4 overflow-y-auto custom-scrollbar pr-1 -mr-1 max-sm:space-y-3">
                 <button
                   onClick={() => {
                     setIsSettingsOpen(false);

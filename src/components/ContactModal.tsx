@@ -405,7 +405,7 @@ export function ContactModal({ contact, isOpen, onClose, onSave, onDelete, allCo
           animate={{ opacity: 1 }}
           exit={{ opacity: 0 }}
           transition={{ duration: 0.2 }}
-          className="fixed inset-0 z-50 flex items-center justify-center p-4 bg-black/40 backdrop-blur-md overflow-y-auto"
+          className="fixed inset-0 z-50 flex items-center justify-center p-4 bg-black/40 backdrop-blur-md overflow-y-auto max-sm:p-2"
           onMouseDown={(e) => {
             if (e.target === e.currentTarget) {
               handleSaveAndClose();
@@ -418,12 +418,12 @@ export function ContactModal({ contact, isOpen, onClose, onSave, onDelete, allCo
             animate={{ opacity: 1, scale: 1, y: 0 }}
             exit={{ opacity: 0, scale: 0.98, y: 8 }}
             transition={{ duration: 0.3, ease: [0.16, 1, 0.3, 1] }}
-            className="bg-[#fbfaf5] rounded-[32px] shadow-2xl w-full max-w-2xl overflow-hidden my-auto relative border border-[#e0dbc5] flex flex-col max-h-[90vh]"
+            className="bg-[#fbfaf5] rounded-[32px] shadow-2xl w-full max-w-2xl overflow-hidden my-auto relative border border-[#e0dbc5] flex flex-col max-h-[90vh] max-sm:max-h-[96dvh] max-sm:rounded-[24px]"
             onClick={e => e.stopPropagation()}
             onMouseDown={e => e.stopPropagation()}
           >
-            <div className="flex items-center justify-between p-8 border-b border-[#e0dbc5] shrink-0 bg-[#fbfaf5] z-10">
-              <h2 className="text-3xl font-serif text-[#4a453e]">
+            <div className="flex items-center justify-between p-8 border-b border-[#e0dbc5] shrink-0 bg-[#fbfaf5] z-10 max-sm:p-5">
+              <h2 className="text-3xl font-serif text-[#4a453e] max-sm:text-2xl">
                 Connection
               </h2>
               <button type="button" onClick={onClose} className="p-2 text-[#8e8a75] hover:text-[#4a453e] rounded-full hover:bg-[#e8e4d3] transition-colors">
@@ -433,11 +433,11 @@ export function ContactModal({ contact, isOpen, onClose, onSave, onDelete, allCo
               </button>
             </div>
 
-            <div className="flex px-8 border-b border-[#e0dbc5] shrink-0 gap-8 bg-white/50 backdrop-blur-sm z-10 sticky top-0">
+            <div className="flex px-8 border-b border-[#e0dbc5] shrink-0 gap-8 bg-white/50 backdrop-blur-sm z-10 sticky top-0 max-sm:px-5 max-sm:gap-6">
               <button 
                 type="button" 
                 onClick={() => setActiveTab('details')}
-                className={`py-4 text-sm font-bold uppercase tracking-wider transition-all duration-300 relative ${activeTab === 'details' ? 'text-[#5a5a40]' : 'text-[#a8a38d] hover:text-[#6d6858]'}`}
+                className={`py-4 text-sm font-bold uppercase tracking-wider transition-all duration-300 relative max-sm:py-3 max-sm:text-xs ${activeTab === 'details' ? 'text-[#5a5a40]' : 'text-[#a8a38d] hover:text-[#6d6858]'}`}
               >
                 Details
                 {activeTab === 'details' && (
@@ -447,7 +447,7 @@ export function ContactModal({ contact, isOpen, onClose, onSave, onDelete, allCo
               <button 
                 type="button" 
                 onClick={() => setActiveTab('history')}
-                className={`py-4 text-sm font-bold uppercase tracking-wider transition-all duration-300 relative ${activeTab === 'history' ? 'text-[#5a5a40]' : 'text-[#a8a38d] hover:text-[#6d6858]'}`}
+                className={`py-4 text-sm font-bold uppercase tracking-wider transition-all duration-300 relative max-sm:py-3 max-sm:text-xs ${activeTab === 'history' ? 'text-[#5a5a40]' : 'text-[#a8a38d] hover:text-[#6d6858]'}`}
               >
                 History
                 {activeTab === 'history' && (
@@ -457,7 +457,7 @@ export function ContactModal({ contact, isOpen, onClose, onSave, onDelete, allCo
             </div>
 
             <form onSubmit={handleSubmit} className="flex flex-col flex-1 overflow-hidden relative">
-              <div className="p-8 overflow-y-auto flex-1 custom-scrollbar min-h-[500px]">
+              <div className="p-8 overflow-y-auto flex-1 custom-scrollbar min-h-[500px] max-sm:min-h-0 max-sm:p-5">
                 <AnimatePresence mode="wait">
                   {activeTab === 'details' && (
                     <motion.div 
@@ -466,16 +466,16 @@ export function ContactModal({ contact, isOpen, onClose, onSave, onDelete, allCo
                       animate={{ opacity: 1, x: 0 }}
                       exit={{ opacity: 0, x: 20 }}
                       transition={{ duration: 0.2 }}
-                      className="space-y-10"
+                      className="space-y-10 max-sm:space-y-7"
                     >
                     <div className="space-y-6">
                       <div className="flex flex-col sm:flex-row gap-5 items-start">
                         <div className="shrink-0 flex flex-col items-center gap-3 w-full sm:w-auto">
-                          <div className={`w-32 h-32 mx-auto rounded-full shadow-inner overflow-hidden flex flex-col items-center justify-center border border-[#e0dbc5] group relative cursor-pointer ${!formData.profilePicture ? avatarColorClass : 'bg-[#f4f1e6]'}`} onClick={() => fileInputRef.current?.click()}>
+                          <div className={`w-32 h-32 mx-auto rounded-full shadow-inner overflow-hidden flex flex-col items-center justify-center border border-[#e0dbc5] group relative cursor-pointer max-sm:w-24 max-sm:h-24 ${!formData.profilePicture ? avatarColorClass : 'bg-[#f4f1e6]'}`} onClick={() => fileInputRef.current?.click()}>
                             {formData.profilePicture ? (
                               <img src={formData.profilePicture} alt="Avatar" className="w-full h-full object-cover group-hover:scale-110 transition-all duration-500" />
                             ) : (
-                              <span className="text-5xl font-serif tracking-wide transition-all duration-500 group-hover:opacity-0 group-hover:scale-95">{getInitials(formData.name)}</span>
+                              <span className="text-5xl font-serif tracking-wide transition-all duration-500 group-hover:opacity-0 group-hover:scale-95 max-sm:text-4xl">{getInitials(formData.name)}</span>
                             )}
                             <div className="absolute inset-0 bg-black/20 opacity-0 group-hover:opacity-100 transition-opacity duration-300 flex items-center justify-center backdrop-blur-[2px]">
                               <Camera className="text-white" size={28} />
@@ -1122,9 +1122,9 @@ export function ContactModal({ contact, isOpen, onClose, onSave, onDelete, allCo
                     className="space-y-6"
                   >
                     <div className="space-y-3">
-                      <h3 className="text-lg font-serif text-[#4a453e] leading-tight">Log Contact</h3>
-                      <div className="bg-[#f4f1e6] p-5 rounded-2xl border border-[#e0dbc5] space-y-4">
-                      <div className="bg-white border border-[#e0dbc5] rounded-2xl p-4 space-y-3 shadow-sm">
+                      <h3 className="text-lg font-serif text-[#4a453e] leading-tight max-sm:text-base">Log Contact</h3>
+                      <div className="bg-[#f4f1e6] p-5 rounded-2xl border border-[#e0dbc5] space-y-4 max-sm:p-3">
+                      <div className="bg-white border border-[#e0dbc5] rounded-2xl p-4 space-y-3 shadow-sm max-sm:p-3">
                         <div className="flex items-center justify-between gap-3">
                           <div>
                             <p className="text-[10px] uppercase tracking-wider font-bold text-[#a8a38d]">When</p>
@@ -1163,7 +1163,7 @@ export function ContactModal({ contact, isOpen, onClose, onSave, onDelete, allCo
                         <button 
                           type="button" 
                           onClick={handleAddInteraction}
-                          className="text-white bg-[#5a5a40] hover:bg-[#4a4a34] px-5 py-2 rounded-full flex items-center gap-2 text-[11px] uppercase font-bold tracking-wider transition-colors shadow-sm"
+                          className="text-white bg-[#5a5a40] hover:bg-[#4a4a34] px-5 py-2 rounded-full flex items-center gap-2 text-[11px] uppercase font-bold tracking-wider transition-colors shadow-sm max-sm:w-full max-sm:justify-center"
                         >
                           <Plus size={14} /> Log Contact
                         </button>
@@ -1208,18 +1208,18 @@ export function ContactModal({ contact, isOpen, onClose, onSave, onDelete, allCo
               </AnimatePresence>
             </div>
 
-            <div className="p-6 border-t border-[#e0dbc5] shrink-0 bg-[#fbfaf5] flex items-center justify-end z-10">
-              <div className="flex items-center gap-3">
+            <div className="p-6 border-t border-[#e0dbc5] shrink-0 bg-[#fbfaf5] flex items-center justify-end z-10 max-sm:p-4">
+              <div className="flex items-center gap-3 max-sm:w-full max-sm:justify-end max-sm:gap-2">
                 <button
                   type="button"
                   onClick={onClose}
-                  className="px-6 py-2.5 text-[#6d6858] hover:bg-[#e8e4d3] font-medium rounded-full transition-colors text-sm"
+                  className="px-6 py-2.5 text-[#6d6858] hover:bg-[#e8e4d3] font-medium rounded-full transition-colors text-sm max-sm:px-4"
                 >
                   Cancel
                 </button>
                 <button
                   type="submit"
-                  className="px-8 py-2.5 bg-[#5a5a40] hover:bg-[#4a4a34] text-[#fbfaf5] font-medium rounded-full transition-all duration-300 hover:-translate-y-0.5 active:scale-95 shadow-md hover:shadow-lg text-sm"
+                  className="px-8 py-2.5 bg-[#5a5a40] hover:bg-[#4a4a34] text-[#fbfaf5] font-medium rounded-full transition-all duration-300 hover:-translate-y-0.5 active:scale-95 shadow-md hover:shadow-lg text-sm max-sm:flex-1 max-sm:px-5"
                 >
                   Save Connection
                 </button>
