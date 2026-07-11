@@ -6,7 +6,7 @@ import { GraphView } from './components/GraphView';
 import { GoalsDashboard } from './components/GoalsDashboard';
 import { initAuth, googleSignIn, logout, getAccessToken } from './lib/auth';
 import { User } from 'firebase/auth';
-import { AppSettings, Contact, DEFAULT_APP_SETTINGS, getSpreadsheetId, createSpreadsheet, getContacts, saveContacts, findExistingSpreadsheet, findSpreadsheetCandidates, setSpreadsheetId, clearSpreadsheetId, getAppSettings, saveAppSettings } from './lib/sheets';
+import { AppSettings, Contact, ContactHistoryEntry, DEFAULT_APP_SETTINGS, getSpreadsheetId, createSpreadsheet, getContacts, saveContacts, findExistingSpreadsheet, findSpreadsheetCandidates, setSpreadsheetId, clearSpreadsheetId, getAppSettings, saveAppSettings } from './lib/sheets';
 import { sendReminderEmail } from './lib/gmail';
 import { DEFAULT_REMINDER_EMAIL_TEMPLATE, ReminderEmailTemplate, normalizeReminderEmailTemplate, renderReminderEmailTemplate } from './lib/reminderEmail';
 import {
@@ -21,7 +21,7 @@ import {
   normalizeReminderTaskTemplate,
   renderReminderTaskTemplate,
 } from './lib/googleTasks';
-import { addDays, differenceInDays, parseISO } from 'date-fns';
+import { addDays, differenceInDays, parseISO, startOfDay } from 'date-fns';
 import { Bug, CheckCircle2, Copy, ListTodo, LogOut, Mail, Plus, RotateCcw, Save, Search, Send, Loader2, Sparkles, UserRound, LayoutGrid, Network, Settings, X } from 'lucide-react';
 import { motion, AnimatePresence } from 'motion/react';
 
@@ -187,11 +187,18 @@ export default function App() {
         loadedContacts = await getContacts(token, currentSpreadsheetId);
       }
 
+      let loadedContactsNeedSave = false;
+      const normalizedLoadedContacts = normalizeContactsActivity(loadedContacts);
+      if (haveContactsChanged(loadedContacts, normalizedLoadedContacts)) {
+        loadedContacts = normalizedLoadedContacts;
+        loadedContactsNeedSave = true;
+      }
+
       try {
         const taskSyncResult = await syncGoogleReminderTasks(token, loadedContacts, loadedAppSettings);
         if (taskSyncResult.contactsChanged) {
           loadedContacts = taskSyncResult.contacts;
-          await saveContacts(token, currentSpreadsheetId, loadedContacts);
+          loadedContactsNeedSave = true;
         }
         if (taskSyncResult.settingsChanged) {
           loadedAppSettings = taskSyncResult.settings;
@@ -200,6 +207,10 @@ export default function App() {
         }
       } catch (err) {
         console.warn('Failed to sync Google Tasks reminders:', err);
+      }
+
+      if (loadedContactsNeedSave) {
+        await saveContacts(token, currentSpreadsheetId, loadedContacts);
       }
 
       setContacts(loadedContacts);
@@ -220,16 +231,45 @@ export default function App() {
   const parseContactDate = (value?: string) => {
     if (!value) return null;
     const date = parseISO(value);
-    return Number.isNaN(date.getTime()) ? null : date;
+    return Number.isNaN(date.getTime()) ? null : startOfDay(date);
+  };
+
+  const getToday = () => startOfDay(new Date());
+
+  const getHistoryEntryTime = (entry: ContactHistoryEntry) => {
+    const time = parseContactDate(entry.date)?.getTime();
+    return typeof time === 'number' && Number.isFinite(time) ? time : -Infinity;
+  };
+
+  const normalizeContactActivity = (contact: Contact): Contact => {
+    const sortedHistory = [...(contact.history || [])].sort((a, b) => getHistoryEntryTime(b) - getHistoryEntryTime(a));
+    const latestEntry = sortedHistory.find((entry) => Number.isFinite(getHistoryEntryTime(entry)));
+
+    return {
+      ...contact,
+      history: sortedHistory,
+      lastContactDate: latestEntry?.date || contact.lastContactDate || '',
+    };
+  };
+
+  const normalizeContactsActivity = (sourceContacts: Contact[]) => (
+    sourceContacts.map(normalizeContactActivity)
+  );
+
+  const haveContactsChanged = (a: Contact[], b: Contact[]) => JSON.stringify(a) !== JSON.stringify(b);
+
+  const getDaysSinceLastContact = (contact: Contact) => {
+    const lastContact = parseContactDate(contact.lastContactDate);
+    return lastContact ? Math.max(0, differenceInDays(getToday(), lastContact)) : undefined;
   };
 
   const getContactReminderDueDate = (contact: Contact) => {
     const oneTimeReminderDate = parseContactDate(contact.oneTimeReminderDate);
     if (oneTimeReminderDate) return oneTimeReminderDate;
 
+    if (!contact.reminderIntervalDays || contact.reminderIntervalDays <= 0) return null;
     const lastContactDate = parseContactDate(contact.lastContactDate);
-    if (!lastContactDate || !contact.reminderIntervalDays) return null;
-    return addDays(lastContactDate, contact.reminderIntervalDays);
+    return lastContactDate ? addDays(lastContactDate, contact.reminderIntervalDays) : getToday();
   };
 
   const hasContactReminder = (contact: Contact) => Boolean(getContactReminderDueDate(contact));
@@ -237,7 +277,7 @@ export default function App() {
   const getContactReminderOverdueDays = (contact: Contact) => {
     const dueDate = getContactReminderDueDate(contact);
     if (!dueDate) return -9999;
-    return differenceInDays(new Date(), dueDate);
+    return differenceInDays(getToday(), dueDate);
   };
 
   const hasStoredReminderTask = (contact: Contact) => Boolean(
@@ -263,14 +303,12 @@ export default function App() {
   });
 
   const getReminderTaskPayload = (contact: Contact, dueDate: Date, template: ReminderTaskTemplate) => {
-    const lastContact = parseContactDate(contact.lastContactDate);
-    const daysSinceContact = lastContact ? Math.max(0, differenceInDays(new Date(), lastContact)) : undefined;
     const dueIso = dueDate.toISOString();
     const due = getGoogleTaskDueValue(dueDate);
     const rendered = renderReminderTaskTemplate(template, {
       contactName: contact.name,
       lastContactDate: contact.lastContactDate,
-      daysSinceContact,
+      daysSinceContact: getDaysSinceLastContact(contact),
       reminderIntervalDays: contact.reminderIntervalDays,
       dueDate: dueIso,
       reason: contact.oneTimeReminderReason,
@@ -400,7 +438,8 @@ export default function App() {
   ) => {
     if (!userEmail) return;
     let needsSave = false;
-    const now = new Date();
+    const now = getToday();
+    const sentAt = new Date();
     
     const updatedContacts = [...currentContacts];
 
@@ -410,8 +449,6 @@ export default function App() {
       if (!dueDate || differenceInDays(now, dueDate) < 0) continue;
 
       const isOneTimeReminder = Boolean(parseContactDate(contact.oneTimeReminderDate));
-      const lastContact = parseContactDate(contact.lastContactDate);
-      const daysSinceContact = lastContact ? Math.max(0, differenceInDays(now, lastContact)) : undefined;
       let shouldSend = false;
 
       if (isOneTimeReminder) {
@@ -429,12 +466,12 @@ export default function App() {
         try {
           await sendReminderEmail(token, userEmail, contact.name, template, {
             lastContactDate: contact.lastContactDate,
-            daysSinceContact,
+            daysSinceContact: getDaysSinceLastContact(contact),
             reminderIntervalDays: contact.reminderIntervalDays,
             dueDate: dueDate.toISOString(),
             reason: contact.oneTimeReminderReason,
           });
-          updatedContacts[i] = { ...contact, lastReminderSentDate: now.toISOString() };
+          updatedContacts[i] = { ...contact, lastReminderSentDate: sentAt.toISOString() };
           needsSave = true;
         } catch (e) {
           console.error('Error sending reminder for', contact.name, e);
@@ -477,19 +514,21 @@ export default function App() {
 
     setLoading(true);
     try {
-      const isExisting = contacts.some(c => c.id === contact.id);
-      const previousContact = contacts.find(c => c.id === contact.id);
+      const normalizedContact = normalizeContactActivity(contact);
+      const isExisting = contacts.some(c => c.id === normalizedContact.id);
+      const previousContact = contacts.find(c => c.id === normalizedContact.id);
       const didLogInteraction = Boolean(
         previousContact
-        && (contact.history?.length || 0) > (previousContact.history?.length || 0),
+        && (normalizedContact.history?.length || 0) > (previousContact.history?.length || 0),
       );
       const metContactGoal = Boolean(previousContact && didLogInteraction && hasContactReminder(previousContact));
       let newContacts = [];
       if (isExisting) {
-        newContacts = contacts.map(c => c.id === contact.id ? contact : c);
+        newContacts = contacts.map(c => c.id === normalizedContact.id ? normalizedContact : c);
       } else {
-        newContacts = [...contacts, contact];
+        newContacts = [...contacts, normalizedContact];
       }
+      newContacts = normalizeContactsActivity(newContacts);
 
       try {
         const taskSyncResult = await syncGoogleReminderTasks(token, newContacts, getCurrentAppSettings());
@@ -510,8 +549,9 @@ export default function App() {
       setIsModalOpen(false);
       setSelectedContact(null);
       if (metContactGoal) {
-        triggerGoalCelebration(contact.name);
+        triggerGoalCelebration(normalizedContact.name);
       }
+      processReminders(token, newContacts, spreadsheetId, user?.email || undefined, reminderEmailTemplate);
     } catch (err) {
       console.error('Failed to save contact:', err);
       alert('Failed to save contact. Please try again.');

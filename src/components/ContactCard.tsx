@@ -41,10 +41,12 @@ export function ContactCard({ contact, onClick, onLogContact }: ContactCardProps
   const [isExpanded, setIsExpanded] = useState(false);
 
   const hasOneTimeReminder = Boolean(contact.oneTimeReminderDate);
-  let lastContactStr = 'Never';
+  let lastContactStr = 'No contact logged';
+  let hasLoggedContact = false;
   if (contact.lastContactDate) {
     try {
       lastContactStr = formatDistanceToNow(parseISO(contact.lastContactDate), { addSuffix: true });
+      hasLoggedContact = true;
     } catch (e) {
       // Ignore parse error
     }
@@ -58,7 +60,7 @@ export function ContactCard({ contact, onClick, onLogContact }: ContactCardProps
     }
   }
   const hasReminder = hasOneTimeReminder || Boolean(contact.reminderIntervalDays && contact.reminderIntervalDays > 0);
-  const reminderLabel = hasOneTimeReminder ? `Once: ${oneTimeReminderStr}` : `Last: ${lastContactStr}`;
+  const reminderLabel = hasOneTimeReminder ? `Once: ${oneTimeReminderStr}` : hasLoggedContact ? `Last: ${lastContactStr}` : lastContactStr;
 
   const primaryCategory = contact.categories && contact.categories.length > 0 ? contact.categories[0] : null;
   const avatarColorClass = primaryCategory ? getCategoryColor(primaryCategory) : 'bg-[#f4f1e6] text-[#8e8a75]';

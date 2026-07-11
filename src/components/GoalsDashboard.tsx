@@ -74,9 +74,9 @@ export function GoalsDashboard({ contacts, onLogContact, onClick }: GoalsDashboa
     const oneTimeReminderDate = parseContactDate(c.oneTimeReminderDate);
     if (oneTimeReminderDate) return oneTimeReminderDate;
 
+    if (!c.reminderIntervalDays || c.reminderIntervalDays <= 0) return today;
     const lastContactDate = parseContactDate(c.lastContactDate);
-    if (!lastContactDate || !c.reminderIntervalDays) return new Date();
-    return addDays(lastContactDate, c.reminderIntervalDays);
+    return lastContactDate ? addDays(lastContactDate, c.reminderIntervalDays) : today;
   };
 
   const getGoalProgress = (contact: Contact) => {
