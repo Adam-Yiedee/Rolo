@@ -1,5 +1,5 @@
 import React, { useState } from 'react';
-import { Contact } from '../lib/sheets';
+import { Contact, ContactEventReminder } from '../lib/sheets';
 import { differenceInCalendarDays, format, parseISO } from 'date-fns';
 import { UserRound, Heart, Clock, Plus, Tag, ChevronDown, ChevronUp } from 'lucide-react';
 import { motion, AnimatePresence } from 'motion/react';
@@ -37,10 +37,33 @@ const getInitials = (name: string) => {
   return (parts[0][0] + parts[parts.length - 1][0]).toUpperCase();
 };
 
+const getEventReminderDate = (reminder: ContactEventReminder) => {
+  const date = parseISO(reminder.date);
+  return Number.isNaN(date.getTime()) ? null : date;
+};
+
+const getEventReminders = (contact: Contact) => {
+  const reminders = [...(contact.eventReminders || [])];
+  if (contact.oneTimeReminderDate) {
+    reminders.push({
+      id: `legacy-${contact.oneTimeReminderDate}`,
+      date: contact.oneTimeReminderDate,
+      createdDate: contact.oneTimeReminderCreatedDate || contact.oneTimeReminderDate,
+      reason: contact.oneTimeReminderReason || '',
+    });
+  }
+
+  return reminders
+    .filter((reminder) => Boolean(getEventReminderDate(reminder)))
+    .sort((a, b) => (getEventReminderDate(a)?.getTime() || 0) - (getEventReminderDate(b)?.getTime() || 0));
+};
+
 export function ContactCard({ contact, onClick, onLogContact }: ContactCardProps) {
   const [isExpanded, setIsExpanded] = useState(false);
 
-  const hasOneTimeReminder = Boolean(contact.oneTimeReminderDate);
+  const eventReminders = getEventReminders(contact);
+  const nextEventReminder = eventReminders[0];
+  const hasEventReminder = eventReminders.length > 0;
   const hasRecurringReminder = Boolean(contact.reminderIntervalDays && contact.reminderIntervalDays > 0);
   let lastContactStr = 'No contact logged';
   let hasLoggedContact = false;
@@ -59,16 +82,16 @@ export function ContactCard({ contact, onClick, onLogContact }: ContactCardProps
       // Ignore parse error
     }
   }
-  let oneTimeReminderStr = '';
-  if (contact.oneTimeReminderDate) {
+  let eventReminderStr = '';
+  if (nextEventReminder) {
     try {
-      oneTimeReminderStr = format(parseISO(contact.oneTimeReminderDate), 'MMM d');
+      eventReminderStr = format(parseISO(nextEventReminder.date), 'MMM d');
     } catch (e) {
-      oneTimeReminderStr = 'set';
+      eventReminderStr = 'set';
     }
   }
-  const hasReminder = hasOneTimeReminder || hasRecurringReminder;
-  const reminderLabel = hasOneTimeReminder ? `Event: ${oneTimeReminderStr}` : hasLoggedContact ? `Last: ${lastContactStr}` : lastContactStr;
+  const hasReminder = hasEventReminder || hasRecurringReminder;
+  const reminderLabel = hasEventReminder ? `Event: ${eventReminderStr}` : hasLoggedContact ? `Last: ${lastContactStr}` : lastContactStr;
 
   const primaryCategory = contact.categories && contact.categories.length > 0 ? contact.categories[0] : null;
   const avatarColorClass = primaryCategory ? getCategoryColor(primaryCategory) : 'bg-[#f4f1e6] text-[#8e8a75]';
@@ -181,13 +204,20 @@ export function ContactCard({ contact, onClick, onLogContact }: ContactCardProps
                     </div>
                   )}
 
-                  {hasOneTimeReminder && (
+                  {hasEventReminder && (
                     <div>
-                      <h4 className="text-[10px] font-bold uppercase tracking-wider text-[#a8a38d] mb-1">Event Reminder</h4>
-                      <p>On {oneTimeReminderStr}</p>
-                      {contact.oneTimeReminderReason && (
-                        <p className="mt-1 text-[#8e8a75]">{contact.oneTimeReminderReason}</p>
-                      )}
+                      <h4 className="text-[10px] font-bold uppercase tracking-wider text-[#a8a38d] mb-1">Event Reminders</h4>
+                      <div className="space-y-1">
+                        {eventReminders.map((reminder) => {
+                          const reminderDate = getEventReminderDate(reminder);
+                          return (
+                            <p key={reminder.id}>
+                              {reminderDate ? format(reminderDate, 'MMM d') : 'Set'}
+                              {reminder.reason ? <span className="text-[#8e8a75]"> - {reminder.reason}</span> : null}
+                            </p>
+                          );
+                        })}
+                      </div>
                     </div>
                   )}
                   

@@ -1,5 +1,5 @@
 import React, { useMemo, useState } from 'react';
-import { Contact } from '../lib/sheets';
+import { Contact, ContactEventReminder } from '../lib/sheets';
 import {
   addDays,
   addMonths,
@@ -30,6 +30,7 @@ type GoalItem = {
   type: 'recurring' | 'event';
   contact: Contact;
   dueDate: Date;
+  eventReminder?: ContactEventReminder;
 };
 
 const getInitials = (name: string) => {
@@ -77,7 +78,35 @@ export function GoalsDashboard({ contacts, onLogContact, onClick }: GoalsDashboa
     return Number.isNaN(date.getTime()) ? null : startOfDay(date);
   };
 
-  const getEventReminderDate = (contact: Contact) => parseContactDate(contact.oneTimeReminderDate);
+  const getEventReminders = (contact: Contact) => {
+    const reminders = [...(contact.eventReminders || [])];
+    if (contact.oneTimeReminderDate) {
+      reminders.push({
+        id: `legacy-${contact.oneTimeReminderDate}`,
+        date: contact.oneTimeReminderDate,
+        createdDate: contact.oneTimeReminderCreatedDate || contact.oneTimeReminderDate,
+        reason: contact.oneTimeReminderReason || '',
+      });
+    }
+
+    return reminders
+      .map((reminder) => {
+        const dueDate = parseContactDate(reminder.date);
+        if (!dueDate) return null;
+        return {
+          ...reminder,
+          date: dueDate.toISOString(),
+          createdDate: parseContactDate(reminder.createdDate)?.toISOString() || dueDate.toISOString(),
+          reason: reminder.reason?.trim() || '',
+        };
+      })
+      .filter((reminder): reminder is ContactEventReminder => Boolean(reminder))
+      .sort((a, b) => {
+        const aDate = parseContactDate(a.date);
+        const bDate = parseContactDate(b.date);
+        return (aDate?.getTime() || 0) - (bDate?.getTime() || 0);
+      });
+  };
 
   const getRecurringReminderDate = (contact: Contact) => {
     if (!contact.reminderIntervalDays || contact.reminderIntervalDays <= 0) return null;
@@ -88,7 +117,7 @@ export function GoalsDashboard({ contacts, onLogContact, onClick }: GoalsDashboa
   const getGoalItems = (contact: Contact): GoalItem[] => {
     const items: GoalItem[] = [];
     const recurringReminderDate = getRecurringReminderDate(contact);
-    const eventReminderDate = getEventReminderDate(contact);
+    const eventReminders = getEventReminders(contact);
 
     if (recurringReminderDate) {
       items.push({
@@ -99,12 +128,15 @@ export function GoalsDashboard({ contacts, onLogContact, onClick }: GoalsDashboa
       });
     }
 
-    if (eventReminderDate) {
+    for (const eventReminder of eventReminders) {
+      const eventReminderDate = parseContactDate(eventReminder.date);
+      if (!eventReminderDate) continue;
       items.push({
-        id: `${contact.id}:event`,
+        id: `${contact.id}:event:${eventReminder.id}`,
         type: 'event',
         contact,
         dueDate: eventReminderDate,
+        eventReminder,
       });
     }
 
@@ -113,7 +145,7 @@ export function GoalsDashboard({ contacts, onLogContact, onClick }: GoalsDashboa
 
   const getGoalProgress = (item: GoalItem) => {
     if (item.type === 'event') {
-      const createdDate = parseContactDate(item.contact.oneTimeReminderCreatedDate) || parseContactDate(item.contact.lastContactDate) || today;
+      const createdDate = parseContactDate(item.eventReminder?.createdDate) || parseContactDate(item.contact.lastContactDate) || today;
       const totalDays = Math.max(1, differenceInDays(item.dueDate, createdDate));
       const elapsedDays = Math.max(0, differenceInDays(today, createdDate));
       return Math.min(elapsedDays / totalDays, 1);
@@ -163,7 +195,7 @@ export function GoalsDashboard({ contacts, onLogContact, onClick }: GoalsDashboa
 
   const getGoalDetailText = (item: GoalItem) => {
     if (item.type === 'event') {
-      return item.contact.oneTimeReminderReason?.trim() || 'Event Reminder';
+      return item.eventReminder?.reason?.trim() || 'Event Reminder';
     }
 
     return getLastContactText(item.contact);
@@ -267,7 +299,7 @@ export function GoalsDashboard({ contacts, onLogContact, onClick }: GoalsDashboa
                               borderColor: goalColor.borderColor,
                               color: goalColor.color,
                             }}
-                            title={item.type === 'event' && contact.oneTimeReminderReason ? `${contact.name}: ${contact.oneTimeReminderReason}` : contact.name}
+                            title={item.type === 'event' && item.eventReminder?.reason ? `${contact.name}: ${item.eventReminder.reason}` : contact.name}
                           >
                             <span className="block whitespace-normal break-words">{getShortName(contact.name)}</span>
                           </button>

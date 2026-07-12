@@ -6,7 +6,7 @@ import { GraphView } from './components/GraphView';
 import { GoalsDashboard } from './components/GoalsDashboard';
 import { initAuth, googleSignIn, logout, getAccessToken } from './lib/auth';
 import { User } from 'firebase/auth';
-import { AppSettings, Contact, ContactHistoryEntry, DEFAULT_APP_SETTINGS, getSpreadsheetId, createSpreadsheet, getContacts, saveContacts, findExistingSpreadsheet, findSpreadsheetCandidates, setSpreadsheetId, clearSpreadsheetId, getAppSettings, saveAppSettings } from './lib/sheets';
+import { AppSettings, Contact, ContactEventReminder, ContactHistoryEntry, DEFAULT_APP_SETTINGS, getSpreadsheetId, createSpreadsheet, getContacts, saveContacts, findExistingSpreadsheet, findSpreadsheetCandidates, setSpreadsheetId, clearSpreadsheetId, getAppSettings, saveAppSettings } from './lib/sheets';
 import { sendReminderEmail } from './lib/gmail';
 import { DEFAULT_REMINDER_EMAIL_TEMPLATE, ReminderEmailTemplate, normalizeReminderEmailTemplate, renderReminderEmailTemplate } from './lib/reminderEmail';
 import {
@@ -232,14 +232,64 @@ export default function App() {
     return typeof time === 'number' && Number.isFinite(time) ? time : -Infinity;
   };
 
+  const createEventReminderId = () => (
+    typeof crypto !== 'undefined' && 'randomUUID' in crypto
+      ? crypto.randomUUID()
+      : `${Date.now()}-${Math.random().toString(36).slice(2)}`
+  );
+
+  const getEventReminderTime = (reminder: ContactEventReminder) => {
+    const time = parseContactDate(reminder.date)?.getTime();
+    return typeof time === 'number' && Number.isFinite(time) ? time : Infinity;
+  };
+
+  const normalizeEventReminders = (contact: Contact): ContactEventReminder[] => {
+    const reminders = [...(contact.eventReminders || [])];
+    if (contact.oneTimeReminderDate) {
+      reminders.push({
+        id: `legacy-${contact.oneTimeReminderDate}`,
+        date: contact.oneTimeReminderDate,
+        createdDate: contact.oneTimeReminderCreatedDate || contact.oneTimeReminderDate,
+        reason: contact.oneTimeReminderReason || '',
+      });
+    }
+
+    const seen = new Set<string>();
+    return reminders
+      .map((reminder) => {
+        const date = parseContactDate(reminder.date);
+        if (!date) return null;
+
+        return {
+          id: reminder.id || createEventReminderId(),
+          date: date.toISOString(),
+          createdDate: parseContactDate(reminder.createdDate)?.toISOString() || date.toISOString(),
+          reason: (reminder.reason || '').trim(),
+        };
+      })
+      .filter((reminder): reminder is ContactEventReminder => Boolean(reminder))
+      .filter((reminder) => {
+        const key = `${reminder.date}|${reminder.reason.toLowerCase()}`;
+        if (seen.has(key)) return false;
+        seen.add(key);
+        return true;
+      })
+      .sort((a, b) => getEventReminderTime(a) - getEventReminderTime(b));
+  };
+
   const normalizeContactActivity = (contact: Contact): Contact => {
     const sortedHistory = [...(contact.history || [])].sort((a, b) => getHistoryEntryTime(b) - getHistoryEntryTime(a));
     const latestEntry = sortedHistory.find((entry) => Number.isFinite(getHistoryEntryTime(entry)));
+    const eventReminders = normalizeEventReminders(contact);
 
     return {
       ...contact,
       history: sortedHistory,
       lastContactDate: latestEntry?.date || contact.lastContactDate || '',
+      oneTimeReminderDate: '',
+      oneTimeReminderCreatedDate: '',
+      oneTimeReminderReason: '',
+      eventReminders,
     };
   };
 
@@ -254,7 +304,18 @@ export default function App() {
     return lastContact ? Math.max(0, differenceInDays(getToday(), lastContact)) : undefined;
   };
 
-  const getEventReminderDueDate = (contact: Contact) => parseContactDate(contact.oneTimeReminderDate);
+  const getEventReminderEntries = (contact: Contact) => (
+    normalizeEventReminders(contact)
+      .map((reminder) => ({
+        reminder,
+        dueDate: parseContactDate(reminder.date),
+      }))
+      .filter((entry): entry is { reminder: ContactEventReminder; dueDate: Date } => Boolean(entry.dueDate))
+  );
+
+  const getNextEventReminderEntry = (contact: Contact) => getEventReminderEntries(contact)[0] || null;
+
+  const getEventReminderDueDate = (contact: Contact) => getNextEventReminderEntry(contact)?.dueDate || null;
 
   const getRecurringReminderDueDate = (contact: Contact) => {
     if (!contact.reminderIntervalDays || contact.reminderIntervalDays <= 0) return null;
@@ -272,10 +333,9 @@ export default function App() {
     return eventDate || recurringDate;
   };
 
-  const isEventReminderDueDate = (contact: Contact, dueDate: Date) => {
-    const eventDate = getEventReminderDueDate(contact);
-    return Boolean(eventDate && eventDate.getTime() === dueDate.getTime());
-  };
+  const getEventReminderForDueDate = (contact: Contact, dueDate: Date) => (
+    getEventReminderEntries(contact).find((entry) => entry.dueDate.getTime() === dueDate.getTime())?.reminder || null
+  );
 
   const hasContactReminder = (contact: Contact) => Boolean(getContactReminderDueDate(contact));
 
@@ -310,14 +370,14 @@ export default function App() {
   const getReminderTaskPayload = (contact: Contact, dueDate: Date, template: ReminderTaskTemplate) => {
     const dueIso = dueDate.toISOString();
     const due = getGoogleTaskDueValue(dueDate);
-    const isEventReminder = isEventReminderDueDate(contact, dueDate);
+    const eventReminder = getEventReminderForDueDate(contact, dueDate);
     const rendered = renderReminderTaskTemplate(template, {
       contactName: contact.name,
       lastContactDate: contact.lastContactDate,
       daysSinceContact: getDaysSinceLastContact(contact),
       reminderIntervalDays: contact.reminderIntervalDays,
       dueDate: dueIso,
-      reason: isEventReminder ? contact.oneTimeReminderReason : '',
+      reason: eventReminder?.reason || '',
     });
 
     return {
@@ -452,29 +512,33 @@ export default function App() {
 
     for (let i = 0; i < updatedContacts.length; i++) {
       const contact = updatedContacts[i];
-      const eventDueDate = getEventReminderDueDate(contact);
+      const dueEventEntries = getEventReminderEntries(contact)
+        .filter((entry) => differenceInDays(now, entry.dueDate) >= 0);
+      const sentEventIds = new Set<string>();
 
-      if (eventDueDate && differenceInDays(now, eventDueDate) >= 0) {
+      for (const eventEntry of dueEventEntries) {
         try {
           await sendReminderEmail(token, userEmail, contact.name, template, {
             lastContactDate: contact.lastContactDate,
             daysSinceContact: getDaysSinceLastContact(contact),
             reminderIntervalDays: contact.reminderIntervalDays,
-            dueDate: eventDueDate.toISOString(),
-            reason: contact.oneTimeReminderReason,
+            dueDate: eventEntry.dueDate.toISOString(),
+            reason: eventEntry.reminder.reason,
           });
-          updatedContacts[i] = {
-            ...contact,
-            lastReminderSentDate: sentAt.toISOString(),
-            oneTimeReminderDate: '',
-            oneTimeReminderCreatedDate: '',
-            oneTimeReminderReason: '',
-          };
-          needsSave = true;
-          continue;
+          sentEventIds.add(eventEntry.reminder.id);
         } catch (e) {
           console.error('Error sending event reminder for', contact.name, e);
         }
+      }
+
+      if (sentEventIds.size > 0) {
+        updatedContacts[i] = {
+          ...contact,
+          lastReminderSentDate: sentAt.toISOString(),
+          eventReminders: normalizeEventReminders(contact).filter((reminder) => !sentEventIds.has(reminder.id)),
+        };
+        needsSave = true;
+        continue;
       }
 
       const recurringDueDate = getRecurringReminderDueDate(updatedContacts[i]);
@@ -973,17 +1037,17 @@ export default function App() {
 
       <main className="max-w-7xl mx-auto px-6 flex-1 w-full flex flex-col pt-8 pb-4 min-h-0 max-sm:px-3 max-sm:pt-4 max-sm:pb-3">
         <div className="flex flex-col sm:flex-row sm:items-start justify-between gap-4 mb-4 shrink-0 max-sm:gap-3 max-sm:mb-3">
-          <div className="flex-1 flex flex-col gap-2 max-sm:w-full">
+          <div className="flex-1 flex flex-col gap-1.5 max-sm:w-full">
             <motion.div 
               layout
-              className="flex items-center bg-[#f4f1e6] rounded-full p-1 border border-[#e0dbc5] shadow-inner relative overflow-hidden inline-flex w-fit max-sm:w-full max-sm:justify-between"
+              className="flex items-center bg-[#f4f1e6] rounded-full p-1 border border-[#e0dbc5] shadow-inner relative overflow-hidden inline-flex w-[258px] max-sm:w-full max-sm:justify-between"
               style={{ borderRadius: 9999 }}
             >
               {primaryTabs.map(tab => (
                 <button
                   key={tab.id}
                   onClick={() => setActiveTab(tab.id)}
-                  className={`relative py-1.5 px-5 mx-0.5 text-xs font-bold uppercase tracking-wider rounded-full whitespace-nowrap block outline-none max-sm:flex-1 max-sm:px-3 max-sm:text-[11px] ${activeTab === tab.id ? 'text-[#5a5a40]' : 'text-[#a8a38d] hover:text-[#4a453e]'}`}
+                  className={`relative flex-1 py-1.5 px-5 mx-0.5 text-xs font-bold uppercase tracking-wider rounded-full whitespace-nowrap block outline-none max-sm:px-3 max-sm:text-[11px] ${activeTab === tab.id ? 'text-[#5a5a40]' : 'text-[#a8a38d] hover:text-[#4a453e]'}`}
                 >
                   {activeTab === tab.id && (
                     <motion.div
@@ -1005,14 +1069,14 @@ export default function App() {
                   animate={{ opacity: 1, y: 0 }}
                   exit={{ opacity: 0, y: -4 }}
                   transition={{ duration: 0.18, ease: 'easeOut' }}
-                  className="flex items-center bg-[#f4f1e6] rounded-full p-1 border border-[#e0dbc5] shadow-inner relative overflow-hidden inline-flex w-fit max-sm:w-full max-sm:justify-between"
+                  className="flex items-center bg-[#f4f1e6] rounded-full p-0.5 border border-[#e0dbc5] shadow-inner relative overflow-hidden inline-flex w-[258px] max-w-full max-sm:w-full"
                   style={{ borderRadius: 9999 }}
                 >
                   {contactSortTabs.map(tab => (
                     <button
                       key={tab.id}
                       onClick={() => setContactSortBy(tab.id)}
-                      className={`relative py-1.5 px-4 mx-0.5 text-xs font-bold uppercase tracking-wider rounded-full whitespace-nowrap block outline-none max-sm:flex-1 max-sm:px-3 max-sm:text-[11px] ${contactSortBy === tab.id ? 'text-[#5a5a40]' : 'text-[#a8a38d] hover:text-[#4a453e]'}`}
+                      className={`relative flex-1 py-1 px-2 mx-0.5 text-[10px] font-bold uppercase tracking-wide rounded-full whitespace-nowrap block outline-none max-sm:px-2 ${contactSortBy === tab.id ? 'text-[#5a5a40]' : 'text-[#a8a38d] hover:text-[#4a453e]'}`}
                     >
                       {contactSortBy === tab.id && (
                         <motion.div

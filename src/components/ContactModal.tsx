@@ -1,6 +1,6 @@
 import React, { useState, useEffect, useRef } from 'react';
-import { Contact, SubContact, LinkedContact, ContactHistoryEntry } from '../lib/sheets';
-import { X, Camera, Plus, Trash2, Copy, Check, Mail, Phone } from 'lucide-react';
+import { Contact, ContactEventReminder, SubContact, LinkedContact, ContactHistoryEntry } from '../lib/sheets';
+import { X, Camera, Plus, Trash2, Copy, Check, Mail, Phone, CalendarDays, Pencil, ChevronLeft, ChevronRight } from 'lucide-react';
 import { resizeImage } from '../lib/image';
 import { motion, AnimatePresence } from 'motion/react';
 
@@ -58,7 +58,7 @@ const getInitials = (name: string) => {
 };
 
 const getContactEveryText = (days: number | null) => {
-  if (!days || days < 1) return 'Leave blank if you do not want email reminders.';
+  if (!days || days < 1) return 'No email reminders for this contact.';
   if (days === 1) return 'Email reminder every day to reach out.';
   return `Email reminder every ${days} days to reach out.`;
 };
@@ -147,7 +147,49 @@ const getHistoryDateInputValue = (value: string) => {
   return getDateInputValue(date);
 };
 
-const shouldClearEventReminderForInteraction = (eventDateValue: string | undefined, interactionDateValue: string) => {
+const createEventReminderId = () => (
+  typeof crypto !== 'undefined' && 'randomUUID' in crypto
+    ? crypto.randomUUID()
+    : `${Date.now()}-${Math.random().toString(36).slice(2)}`
+);
+
+const getEventReminderTime = (reminder: ContactEventReminder) => {
+  const time = new Date(reminder.date).getTime();
+  return Number.isFinite(time) ? time : Infinity;
+};
+
+const normalizeEventReminders = (reminders: ContactEventReminder[] = []) => (
+  reminders
+    .map((reminder) => {
+      const date = new Date(reminder.date);
+      if (Number.isNaN(date.getTime())) return null;
+
+      return {
+        id: reminder.id || createEventReminderId(),
+        date: date.toISOString(),
+        createdDate: reminder.createdDate || date.toISOString(),
+        reason: (reminder.reason || '').trim(),
+      };
+    })
+    .filter((reminder): reminder is ContactEventReminder => Boolean(reminder))
+    .sort((a, b) => getEventReminderTime(a) - getEventReminderTime(b))
+);
+
+const getEventRemindersFromContact = (contact: Contact) => {
+  const reminders = [...(contact.eventReminders || [])];
+  if (contact.oneTimeReminderDate) {
+    reminders.push({
+      id: `legacy-${contact.oneTimeReminderDate}`,
+      date: contact.oneTimeReminderDate,
+      createdDate: contact.oneTimeReminderCreatedDate || contact.oneTimeReminderDate,
+      reason: contact.oneTimeReminderReason || '',
+    });
+  }
+
+  return normalizeEventReminders(reminders);
+};
+
+const isEventReminderDueByInteraction = (eventDateValue: string | undefined, interactionDateValue: string) => {
   if (!eventDateValue || !interactionDateValue) return false;
   const eventDate = new Date(eventDateValue);
   const interactionDate = getDateFromInputValue(interactionDateValue);
@@ -159,6 +201,182 @@ const shouldClearEventReminderForInteraction = (eventDateValue: string | undefin
 };
 
 const MAX_QUICK_LOG_DAYS = 30;
+
+const WEEKDAY_LABELS = ['S', 'M', 'T', 'W', 'T', 'F', 'S'];
+
+const getSafeDateInputValue = (value: string) => {
+  if (!value) return getDateInputValue(new Date());
+  const date = getDateFromInputValue(value);
+  return Number.isNaN(date.getTime()) ? getDateInputValue(new Date()) : value;
+};
+
+const getCalendarMonthStart = (date: Date) => new Date(date.getFullYear(), date.getMonth(), 1);
+
+const getCalendarGridDates = (monthDate: Date) => {
+  const monthStart = getCalendarMonthStart(monthDate);
+  const startDate = new Date(monthStart);
+  startDate.setDate(startDate.getDate() - startDate.getDay());
+
+  return Array.from({ length: 42 }, (_, index) => {
+    const date = new Date(startDate);
+    date.setDate(startDate.getDate() + index);
+    return date;
+  });
+};
+
+const isSameCalendarDay = (a: Date, b: Date) => (
+  a.getFullYear() === b.getFullYear()
+  && a.getMonth() === b.getMonth()
+  && a.getDate() === b.getDate()
+);
+
+const getOrdinalSuffix = (day: number) => {
+  if (day >= 11 && day <= 13) return 'th';
+  const lastDigit = day % 10;
+  if (lastDigit === 1) return 'st';
+  if (lastDigit === 2) return 'nd';
+  if (lastDigit === 3) return 'rd';
+  return 'th';
+};
+
+const formatEventReminderDateLabel = (value: string) => {
+  const date = value.length === 10 ? getDateFromInputValue(value) : new Date(value);
+  if (Number.isNaN(date.getTime())) return '';
+  return `${date.toLocaleDateString(undefined, { month: 'long' })} ${date.getDate()}${getOrdinalSuffix(date.getDate())}`;
+};
+
+function ThemedDatePicker({
+  value,
+  onChange,
+  ariaLabel,
+}: {
+  value: string;
+  onChange: (value: string) => void;
+  ariaLabel: string;
+}) {
+  const pickerRef = useRef<HTMLDivElement>(null);
+  const selectedInputValue = getSafeDateInputValue(value);
+  const selectedDate = getDateFromInputValue(selectedInputValue);
+  const [isOpen, setIsOpen] = useState(false);
+  const [visibleMonth, setVisibleMonth] = useState(() => getCalendarMonthStart(selectedDate));
+
+  useEffect(() => {
+    setVisibleMonth(getCalendarMonthStart(selectedDate));
+  }, [selectedInputValue]);
+
+  useEffect(() => {
+    if (!isOpen) return;
+
+    const closeOnOutsideClick = (event: MouseEvent) => {
+      if (!pickerRef.current?.contains(event.target as Node)) {
+        setIsOpen(false);
+      }
+    };
+
+    document.addEventListener('mousedown', closeOnOutsideClick);
+    return () => document.removeEventListener('mousedown', closeOnOutsideClick);
+  }, [isOpen]);
+
+  const calendarDays = getCalendarGridDates(visibleMonth);
+  const today = getDateFromInputValue(getDateInputValue(new Date()));
+
+  return (
+    <div ref={pickerRef} className="relative">
+      <button
+        type="button"
+        onClick={() => setIsOpen((open) => !open)}
+        className="inline-flex items-center gap-2 rounded-xl border border-[#e0dbc5] bg-white px-3 py-1.5 text-xs font-medium text-[#4a453e] shadow-sm outline-none transition-all hover:bg-[#f4f1e6] focus:ring-4 focus:ring-[#5a5a40]/10"
+        aria-label={ariaLabel}
+      >
+        <CalendarDays size={14} />
+        <span>{formatEventReminderDateLabel(selectedInputValue)}</span>
+      </button>
+
+      <AnimatePresence>
+        {isOpen && (
+          <motion.div
+            initial={{ opacity: 0, y: 6, scale: 0.98 }}
+            animate={{ opacity: 1, y: 0, scale: 1 }}
+            exit={{ opacity: 0, y: 4, scale: 0.98 }}
+            transition={{ duration: 0.18, ease: [0.16, 1, 0.3, 1] }}
+            className="absolute right-0 top-full z-[80] mt-2 w-[276px] rounded-2xl border border-[#d8d1b8] bg-[#fbfaf5] p-3 shadow-xl"
+          >
+            <div className="mb-3 flex items-center justify-between">
+              <button
+                type="button"
+                onClick={() => setVisibleMonth((month) => new Date(month.getFullYear(), month.getMonth() - 1, 1))}
+                className="flex h-8 w-8 items-center justify-center rounded-full text-[#8e8a75] transition-colors hover:bg-[#f4f1e6] hover:text-[#4a453e]"
+                aria-label="Previous month"
+              >
+                <ChevronLeft size={16} />
+              </button>
+              <p className="text-sm font-serif text-[#4a453e]">
+                {visibleMonth.toLocaleDateString(undefined, { month: 'long', year: 'numeric' })}
+              </p>
+              <button
+                type="button"
+                onClick={() => setVisibleMonth((month) => new Date(month.getFullYear(), month.getMonth() + 1, 1))}
+                className="flex h-8 w-8 items-center justify-center rounded-full text-[#8e8a75] transition-colors hover:bg-[#f4f1e6] hover:text-[#4a453e]"
+                aria-label="Next month"
+              >
+                <ChevronRight size={16} />
+              </button>
+            </div>
+
+            <div className="grid grid-cols-7 gap-1 text-center">
+              {WEEKDAY_LABELS.map((day, index) => (
+                <div key={`${day}-${index}`} className="py-1 text-[10px] font-bold uppercase tracking-wider text-[#a8a38d]">
+                  {day}
+                </div>
+              ))}
+              {calendarDays.map((day) => {
+                const isSelected = isSameCalendarDay(day, selectedDate);
+                const isToday = isSameCalendarDay(day, today);
+                const isOutsideMonth = day.getMonth() !== visibleMonth.getMonth();
+
+                return (
+                  <button
+                    key={day.toISOString()}
+                    type="button"
+                    onClick={() => {
+                      onChange(getDateInputValue(day));
+                      setIsOpen(false);
+                    }}
+                    className={`relative flex h-8 items-center justify-center rounded-full text-xs font-bold transition-all ${
+                      isSelected
+                        ? 'bg-[#5a5a40] text-white shadow-sm'
+                        : isOutsideMonth
+                          ? 'text-[#c9c3ad] hover:bg-[#f4f1e6] hover:text-[#8e8a75]'
+                          : 'text-[#6d6858] hover:bg-[#e8e4d3] hover:text-[#4a453e]'
+                    }`}
+                  >
+                    {day.getDate()}
+                    {isToday && !isSelected && (
+                      <span className="absolute bottom-1 h-1 w-1 rounded-full bg-[#8e8a75]" />
+                    )}
+                  </button>
+                );
+              })}
+            </div>
+
+            <div className="mt-3 flex justify-end border-t border-[#eeeadd] pt-2">
+              <button
+                type="button"
+                onClick={() => {
+                  onChange(getDateInputValue(new Date()));
+                  setIsOpen(false);
+                }}
+                className="rounded-full px-3 py-1.5 text-[10px] font-bold uppercase tracking-wider text-[#5a5a40] transition-colors hover:bg-[#f4f1e6]"
+              >
+                Today
+              </button>
+            </div>
+          </motion.div>
+        )}
+      </AnimatePresence>
+    </div>
+  );
+}
 
 interface ContactModalProps {
   contact: Contact | null;
@@ -184,6 +402,7 @@ export function ContactModal({ contact, isOpen, onClose, onSave, onDelete, allCo
     oneTimeReminderDate: '',
     oneTimeReminderCreatedDate: '',
     oneTimeReminderReason: '',
+    eventReminders: [],
     linkedContacts: [],
     subContacts: [],
     history: [],
@@ -202,6 +421,12 @@ export function ContactModal({ contact, isOpen, onClose, onSave, onDelete, allCo
   const [isEditingLinkedIn, setIsEditingLinkedIn] = useState(false);
   const [isEditingEmail, setIsEditingEmail] = useState(false);
   const [isEditingPhone, setIsEditingPhone] = useState(false);
+  const [editingEventReminderId, setEditingEventReminderId] = useState<string | null>(null);
+  const [eventReminderDraft, setEventReminderDraft] = useState({
+    date: getDaysFromNowDate(3),
+    reason: '',
+    createdDate: new Date().toISOString(),
+  });
   const [copiedEmail, setCopiedEmail] = useState(false);
   const [copiedPhone, setCopiedPhone] = useState(false);
 
@@ -212,7 +437,8 @@ export function ContactModal({ contact, isOpen, onClose, onSave, onDelete, allCo
         categories: contact.categories || [],
         oneTimeReminderDate: contact.oneTimeReminderDate || '',
         oneTimeReminderCreatedDate: contact.oneTimeReminderCreatedDate || '',
-        oneTimeReminderReason: contact.oneTimeReminderReason || ''
+        oneTimeReminderReason: contact.oneTimeReminderReason || '',
+        eventReminders: getEventRemindersFromContact(contact)
       });
     } else {
       setFormData({
@@ -232,6 +458,7 @@ export function ContactModal({ contact, isOpen, onClose, onSave, onDelete, allCo
         oneTimeReminderDate: '',
         oneTimeReminderCreatedDate: '',
         oneTimeReminderReason: '',
+        eventReminders: [],
         linkedContacts: [],
         subContacts: [],
         history: [],
@@ -239,7 +466,52 @@ export function ContactModal({ contact, isOpen, onClose, onSave, onDelete, allCo
       });
     }
     setActiveTab(initialTab);
+    setEditingEventReminderId(null);
+    setEventReminderDraft({
+      date: getDaysFromNowDate(3),
+      reason: '',
+      createdDate: new Date().toISOString(),
+    });
   }, [contact, isOpen, initialTab]);
+
+  const normalizeReminderFields = (source: Contact): Contact => ({
+    ...source,
+    oneTimeReminderDate: '',
+    oneTimeReminderCreatedDate: '',
+    oneTimeReminderReason: '',
+    eventReminders: normalizeEventReminders(source.eventReminders || []),
+  });
+
+  const applyEventReminderDraftToContact = (source: Contact): Contact => {
+    const normalizedSource = normalizeReminderFields(source);
+    if (!editingEventReminderId || !eventReminderDraft.date) return normalizedSource;
+
+    const date = getIsoFromDateInputValue(eventReminderDraft.date);
+    if (!date) return normalizedSource;
+
+    const reminder: ContactEventReminder = {
+      id: editingEventReminderId === 'new' ? createEventReminderId() : editingEventReminderId,
+      date,
+      createdDate: eventReminderDraft.createdDate || new Date().toISOString(),
+      reason: eventReminderDraft.reason.trim(),
+    };
+    const existingReminders = normalizeEventReminders(normalizedSource.eventReminders || []);
+    let didReplace = false;
+    const nextReminders = editingEventReminderId === 'new'
+      ? [...existingReminders, reminder]
+      : existingReminders.map((existingReminder) => {
+        if (existingReminder.id !== editingEventReminderId) return existingReminder;
+        didReplace = true;
+        return reminder;
+      });
+
+    return normalizeReminderFields({
+      ...normalizedSource,
+      eventReminders: didReplace || editingEventReminderId === 'new'
+        ? nextReminders
+        : [...nextReminders, reminder],
+    });
+  };
 
   const handleSaveAndClose = () => {
     let finalFormData = { ...formData };
@@ -247,9 +519,9 @@ export function ContactModal({ contact, isOpen, onClose, onSave, onDelete, allCo
       finalFormData.categories = [...(finalFormData.categories || []), newCategory.trim()];
       setNewCategory('');
     }
-    finalFormData.oneTimeReminderReason = finalFormData.oneTimeReminderDate
-      ? (finalFormData.oneTimeReminderReason || '').trim()
-      : '';
+    finalFormData = editingEventReminderId
+      ? applyEventReminderDraftToContact(finalFormData)
+      : normalizeReminderFields(finalFormData);
     
     if (!finalFormData.id) {
       finalFormData.id = Date.now().toString();
@@ -272,19 +544,44 @@ export function ContactModal({ contact, isOpen, onClose, onSave, onDelete, allCo
     saveIfReady();
   };
 
-  const saveOnEnter = (e: React.KeyboardEvent<HTMLInputElement>) => {
+  const openEventReminderEditor = (reminder?: ContactEventReminder) => {
+    setEditingEventReminderId(reminder?.id || 'new');
+    setEventReminderDraft({
+      date: reminder ? getHistoryDateInputValue(reminder.date) : getDaysFromNowDate(3),
+      reason: reminder?.reason || '',
+      createdDate: reminder?.createdDate || new Date().toISOString(),
+    });
+    window.setTimeout(() => eventReminderReasonInputRef.current?.focus(), 0);
+  };
+
+  const saveEventReminder = () => {
+    if (!editingEventReminderId || !eventReminderDraft.date) return;
+    setFormData((currentFormData) => applyEventReminderDraftToContact(currentFormData));
+    setEditingEventReminderId(null);
+  };
+
+  const saveEventReminderOnEnter = (e: React.KeyboardEvent<HTMLInputElement>) => {
     if (e.key !== 'Enter') return;
     e.preventDefault();
-    saveIfReady();
+    saveEventReminder();
   };
 
   const addEventReminder = () => {
-    setFormData({
-      ...formData,
-      oneTimeReminderDate: getIsoFromDateInputValue(getDaysFromNowDate(3)),
-      oneTimeReminderCreatedDate: new Date().toISOString(),
-    });
-    window.setTimeout(() => eventReminderReasonInputRef.current?.focus(), 0);
+    openEventReminderEditor();
+  };
+
+  const editEventReminder = (reminder: ContactEventReminder) => {
+    openEventReminderEditor(reminder);
+  };
+
+  const removeEventReminder = (id: string) => {
+    setFormData((currentFormData) => normalizeReminderFields({
+      ...currentFormData,
+      eventReminders: (currentFormData.eventReminders || []).filter((reminder) => reminder.id !== id),
+    }));
+    if (editingEventReminderId === id) {
+      setEditingEventReminderId(null);
+    }
   };
 
   const handleFileUpload = async (e: React.ChangeEvent<HTMLInputElement>) => {
@@ -352,15 +649,14 @@ export function ContactModal({ contact, isOpen, onClose, onSave, onDelete, allCo
   const handleAddInteraction = () => {
     const interactionDate = getIsoFromDateInputValue(newInteractionDate);
     const notes = newInteractionNotes.trim();
-    const shouldClearEventReminder = shouldClearEventReminderForInteraction(formData.oneTimeReminderDate, newInteractionDate);
-    const reminderClearedFormData = shouldClearEventReminder ? {
+    const eventReminders = normalizeEventReminders(formData.eventReminders || []);
+    const remainingEventReminders = eventReminders.filter((reminder) => !isEventReminderDueByInteraction(reminder.date, newInteractionDate));
+    const reminderClearedFormData = {
       ...formData,
       oneTimeReminderDate: '',
       oneTimeReminderCreatedDate: '',
       oneTimeReminderReason: '',
-      lastReminderSentDate: '',
-    } : {
-      ...formData,
+      eventReminders: remainingEventReminders,
       lastReminderSentDate: '',
     };
     const updatedFormData = syncLastContactDateFromHistory(reminderClearedFormData, [
@@ -378,15 +674,164 @@ export function ContactModal({ contact, isOpen, onClose, onSave, onDelete, allCo
   const sliderDaysAgo = Math.min(interactionDaysAgo, MAX_QUICK_LOG_DAYS);
   const sliderProgress = `${(sliderDaysAgo / MAX_QUICK_LOG_DAYS) * 100}%`;
   const hasRecurringReminder = Boolean(formData.reminderIntervalDays && formData.reminderIntervalDays > 0);
-  const hasEventReminder = Boolean(formData.oneTimeReminderDate);
+  const eventReminders = normalizeEventReminders(formData.eventReminders || []);
+  const hasEventReminder = eventReminders.length > 0;
+  const isEventReminderEditing = Boolean(editingEventReminderId);
   const reminderMode = hasRecurringReminder ? 'recurring' : 'none';
   const reminderModeIndex = hasRecurringReminder ? 1 : 0;
-  const oneTimeReminderInputValue = formData.oneTimeReminderDate
-    ? getHistoryDateInputValue(formData.oneTimeReminderDate)
-    : getDaysFromNowDate(3);
-  const oneTimeReminderDaysAhead = getDaysUntilFromDateInput(oneTimeReminderInputValue);
-  const oneTimeReminderSliderValue = Math.min(Math.max(oneTimeReminderDaysAhead, 0), MAX_QUICK_LOG_DAYS);
-  const oneTimeReminderSliderProgress = `${(oneTimeReminderSliderValue / MAX_QUICK_LOG_DAYS) * 100}%`;
+  const eventReminderDaysAhead = getDaysUntilFromDateInput(eventReminderDraft.date);
+  const eventReminderSliderValue = Math.min(Math.max(eventReminderDaysAhead, 0), MAX_QUICK_LOG_DAYS);
+  const eventReminderSliderProgress = `${(eventReminderSliderValue / MAX_QUICK_LOG_DAYS) * 100}%`;
+  const eventReminderSection = (
+    <div className="mt-6 border-t border-[#f0eee0] pt-5">
+      <div className="space-y-2 rounded-2xl border border-[#e0dbc5] bg-white/80 p-3">
+        <div className="flex items-center justify-between gap-3">
+          <p className="text-[10px] uppercase tracking-wider font-bold text-[#a8a38d]">Event Reminders</p>
+          {!isEventReminderEditing && (
+            <button
+              type="button"
+              onClick={addEventReminder}
+              className="inline-flex items-center gap-1.5 rounded-full border border-[#e0dbc5] bg-[#fbfaf5] px-2.5 py-1 text-[10px] font-bold uppercase tracking-wider text-[#5a5a40] shadow-sm hover:bg-[#f4f1e6] transition-colors"
+            >
+              <Plus size={12} /> Add
+            </button>
+          )}
+        </div>
+
+        {!hasEventReminder && !isEventReminderEditing ? (
+          <button
+            type="button"
+            onClick={addEventReminder}
+            className="w-full rounded-xl border border-dashed border-[#d4ccb0] bg-[#fbfaf5] px-3 py-2.5 text-left text-sm text-[#6d6858] hover:border-[#bdb394] hover:bg-[#f4f1e6] transition-colors"
+          >
+            <span className="flex items-center gap-2 font-medium">
+              <Plus size={14} /> Add event reminder
+            </span>
+          </button>
+        ) : null}
+
+        {hasEventReminder && (
+          <div className="space-y-1.5">
+            {eventReminders.map((reminder) => {
+              const reminderInputDate = getHistoryDateInputValue(reminder.date);
+              const reminderDaysAhead = getDaysUntilFromDateInput(reminderInputDate);
+              const reminderDateLabel = formatEventReminderDateLabel(reminder.date);
+              return (
+                <motion.div
+                  key={reminder.id}
+                  layout
+                  className="flex items-center justify-between gap-3 rounded-xl border border-[#e0dbc5] bg-[#fbfaf5] px-3 py-2.5 shadow-sm max-sm:flex-col max-sm:items-stretch"
+                >
+                  <div className="flex min-w-0 items-center gap-2.5">
+                    <div className="flex h-8 w-8 shrink-0 items-center justify-center rounded-full bg-[#e8e4d3] text-[#5a5a40]">
+                      <CalendarDays size={15} />
+                    </div>
+                    <div className="min-w-0">
+                      <p className="text-[13px] font-serif leading-tight text-[#4a453e]">{getOneTimeReminderText(reminderDaysAhead)}</p>
+                      <p className="truncate text-xs text-[#8e8a75]">
+                        {reminder.reason || reminderDateLabel}
+                      </p>
+                    </div>
+                  </div>
+                  <div className="flex shrink-0 items-center justify-end gap-1">
+                    <button
+                      type="button"
+                      onClick={(e) => {
+                        e.stopPropagation();
+                        editEventReminder(reminder);
+                      }}
+                      className="rounded-full border border-[#e0dbc5] bg-white px-2.5 py-1.5 text-[10px] font-bold uppercase tracking-wider text-[#5a5a40] shadow-sm hover:bg-[#f4f1e6] transition-colors"
+                    >
+                      <span className="flex items-center gap-1.5">
+                        <Pencil size={12} /> Edit
+                      </span>
+                    </button>
+                    <button
+                      type="button"
+                      onClick={(e) => {
+                        e.stopPropagation();
+                        removeEventReminder(reminder.id);
+                      }}
+                      className="flex h-8 w-8 items-center justify-center rounded-full text-[#8e8a75] hover:bg-[#fff0eb] hover:text-[#e67e5a] transition-colors"
+                      title="Remove event reminder"
+                    >
+                      <Trash2 size={14} />
+                    </button>
+                  </div>
+                </motion.div>
+              );
+            })}
+          </div>
+        )}
+
+        {isEventReminderEditing && (
+          <AnimatePresence initial={false} mode="wait">
+            <motion.div
+              key={editingEventReminderId || 'event-reminder-editor'}
+              initial={{ opacity: 0, y: 4 }}
+              animate={{ opacity: 1, y: 0 }}
+              exit={{ opacity: 0, y: -4 }}
+              transition={{ duration: 0.16, ease: 'easeOut' }}
+              className="space-y-2 rounded-xl border border-[#e0dbc5] bg-[#fbfaf5] p-3"
+            >
+              <div className="flex items-center justify-between gap-3 max-sm:flex-col max-sm:items-stretch">
+                <p className="text-sm font-serif text-[#4a453e] leading-tight">{getOneTimeReminderText(eventReminderDaysAhead)}</p>
+                <ThemedDatePicker
+                  value={eventReminderDraft.date}
+                  onChange={(date) => setEventReminderDraft({
+                    ...eventReminderDraft,
+                    date,
+                  })}
+                  ariaLabel="Event reminder date"
+                />
+              </div>
+              <input
+                type="range"
+                min="0"
+                max={MAX_QUICK_LOG_DAYS}
+                value={eventReminderSliderValue}
+                onChange={(e) => setEventReminderDraft({
+                  ...eventReminderDraft,
+                  date: getDaysFromNowDate(parseInt(e.target.value, 10)),
+                })}
+                className="days-ago-slider w-full"
+                style={{ '--slider-progress': eventReminderSliderProgress } as React.CSSProperties}
+                aria-label="Event reminder days"
+              />
+              <div className="space-y-1">
+                <label className="text-[10px] uppercase tracking-wider font-bold text-[#a8a38d]">Reason (optional)</label>
+                <input
+                  ref={eventReminderReasonInputRef}
+                  type="text"
+                  value={eventReminderDraft.reason}
+                  onChange={(e) => setEventReminderDraft({ ...eventReminderDraft, reason: e.target.value })}
+                  onKeyDown={saveEventReminderOnEnter}
+                  className="w-full px-3 py-2 bg-white border border-[#e0dbc5] rounded-xl focus:bg-white focus:border-[#d4ccb0] focus:ring-4 focus:ring-[#5a5a40]/10 transition-all outline-none text-sm text-[#4a453e]"
+                  placeholder="Reach out about the LSAT"
+                />
+              </div>
+              <div className="flex justify-end gap-2">
+                <button
+                  type="button"
+                  onClick={() => setEditingEventReminderId(null)}
+                  className="rounded-full px-4 py-2 text-[11px] font-bold uppercase tracking-wider text-[#6d6858] hover:bg-[#e8e4d3] transition-colors"
+                >
+                  Cancel
+                </button>
+                <button
+                  type="button"
+                  onClick={saveEventReminder}
+                  className="inline-flex items-center gap-2 rounded-full bg-[#5a5a40] px-4 py-2 text-[11px] font-bold uppercase tracking-wider text-white shadow-sm hover:bg-[#4a4a34] transition-colors"
+                >
+                  <Check size={14} /> Save Reminder
+                </button>
+              </div>
+            </motion.div>
+          </AnimatePresence>
+        )}
+      </div>
+    </div>
+  );
 
   const updateHistoryNotes = (id: string, notes: string) => {
     const updatedHistory = formData.history.map((entry) => (
@@ -600,133 +1045,76 @@ export function ContactModal({ contact, isOpen, onClose, onSave, onDelete, allCo
                       <div className="grid grid-cols-1 md:grid-cols-2 gap-5">
                         <div className="space-y-1.5">
                           <label className="text-[10px] uppercase tracking-wider font-bold text-[#a8a38d]">Contact Reminder</label>
-                          <div className="relative flex bg-[#f4f1e6] rounded-xl p-1 border border-[#e0dbc5] shadow-inner overflow-hidden">
-                            <motion.span
-                              aria-hidden="true"
-                              className="pointer-events-none absolute inset-y-1 left-1 z-0 rounded-lg bg-white shadow-sm"
-                              style={{ width: 'calc((100% - 0.5rem) / 2)' }}
-                              animate={{ x: `${reminderModeIndex * 100}%` }}
-                              transition={{ type: 'spring', stiffness: 430, damping: 36 }}
-                            />
-                            {[
-                              { id: 'none', label: 'None' },
-                              { id: 'recurring', label: 'Every' },
-                            ].map((option) => (
-                              <button
-                                key={option.id}
-                                type="button"
-                                onClick={() => {
-                                  if (option.id === 'none') {
-                                    setFormData({
-                                      ...formData,
-                                      reminderIntervalDays: null,
-                                      lastReminderSentDate: '',
-                                    });
-                                  } else {
-                                    setFormData({
-                                      ...formData,
-                                      reminderIntervalDays: formData.reminderIntervalDays || 30,
-                                      lastReminderSentDate: '',
-                                    });
-                                  }
-                                }}
-                                className={`relative z-10 flex-1 rounded-lg px-2 py-1.5 text-[10px] font-bold uppercase tracking-wider transition-colors ${reminderMode === option.id ? 'text-[#5a5a40]' : 'text-[#8e8a75] hover:text-[#4a453e]'}`}
-                              >
-                                {option.label}
-                              </button>
-                            ))}
-                          </div>
-
-                          {reminderMode === 'recurring' && (
-                            <div className="space-y-1.5">
-                              <input
-                                type="number"
-                                min="0"
-                                value={formData.reminderIntervalDays || ''}
-                                onChange={e => setFormData({
-                                  ...formData,
-                                  reminderIntervalDays: e.target.value ? parseInt(e.target.value, 10) : null,
-                                  lastReminderSentDate: '',
-                                })}
-                                className="w-full px-4 py-2.5 bg-[#f4f1e6] border border-transparent rounded-xl focus:bg-white focus:border-[#e0dbc5] focus:ring-4 focus:ring-[#5a5a40]/10 transition-all duration-300 outline-none text-[#4a453e] shadow-inner focus:shadow-sm text-sm"
-                                placeholder="Days"
+                          <div className="flex h-[42px] items-stretch overflow-hidden rounded-xl border border-[#e0dbc5] bg-[#f4f1e6] shadow-inner transition-all focus-within:border-[#d4ccb0] focus-within:ring-4 focus-within:ring-[#5a5a40]/10">
+                            <div className="relative flex min-w-0 flex-1 p-1">
+                              <motion.span
+                                aria-hidden="true"
+                                className="pointer-events-none absolute inset-y-1 left-1 z-0 rounded-lg bg-white shadow-sm"
+                                style={{ width: 'calc((100% - 0.5rem) / 2)' }}
+                                animate={{ x: `${reminderModeIndex * 100}%` }}
+                                transition={{ type: 'spring', stiffness: 430, damping: 36 }}
                               />
-                              <p className="text-xs text-[#8e8a75] px-1">{getContactEveryText(formData.reminderIntervalDays)}</p>
+                              {[
+                                { id: 'none', label: 'None' },
+                                { id: 'recurring', label: 'Every' },
+                              ].map((option) => (
+                                <button
+                                  key={option.id}
+                                  type="button"
+                                  onClick={() => {
+                                    if (option.id === 'none') {
+                                      setFormData({
+                                        ...formData,
+                                        reminderIntervalDays: null,
+                                        lastReminderSentDate: '',
+                                      });
+                                    } else {
+                                      setFormData({
+                                        ...formData,
+                                        reminderIntervalDays: formData.reminderIntervalDays || 30,
+                                        lastReminderSentDate: '',
+                                      });
+                                    }
+                                  }}
+                                  className={`relative z-10 flex-1 rounded-lg px-2 py-1.5 text-[10px] font-bold uppercase tracking-wider transition-colors ${reminderMode === option.id ? 'text-[#5a5a40]' : 'text-[#8e8a75] hover:text-[#4a453e]'}`}
+                                >
+                                  {option.label}
+                                </button>
+                              ))}
                             </div>
-                          )}
 
-                          <div className="space-y-2 rounded-xl border border-[#e0dbc5] bg-white p-3">
-                            <div className="flex items-center justify-between gap-3">
-                              <p className="text-[10px] uppercase tracking-wider font-bold text-[#a8a38d]">Event Reminder</p>
-                              {hasEventReminder ? (
-                                <button
-                                  type="button"
-                                  onClick={() => setFormData({
-                                    ...formData,
-                                    oneTimeReminderDate: '',
-                                    oneTimeReminderCreatedDate: '',
-                                    oneTimeReminderReason: '',
-                                  })}
-                                  className="text-[10px] font-bold uppercase tracking-wider text-[#8e8a75] hover:text-[#e67e5a] transition-colors"
+                            <AnimatePresence initial={false}>
+                              {reminderMode === 'recurring' && (
+                                <motion.div
+                                  key="reminder-days"
+                                  initial={{ opacity: 0, width: 0 }}
+                                  animate={{ opacity: 1, width: 108 }}
+                                  exit={{ opacity: 0, width: 0 }}
+                                  transition={{ duration: 0.2, ease: 'easeOut' }}
+                                  className="flex items-center gap-1.5 overflow-hidden border-l border-[#e0dbc5] bg-white/70 px-2.5"
                                 >
-                                  Clear
-                                </button>
-                              ) : (
-                                <button
-                                  type="button"
-                                  onClick={addEventReminder}
-                                  className="text-[10px] font-bold uppercase tracking-wider text-[#5a5a40] hover:text-[#4a453e] transition-colors"
-                                >
-                                  Add
-                                </button>
+                                  <input
+                                    type="number"
+                                    min="1"
+                                    value={formData.reminderIntervalDays || ''}
+                                    onChange={e => {
+                                      const nextDays = parseInt(e.target.value, 10);
+                                      setFormData({
+                                        ...formData,
+                                        reminderIntervalDays: Number.isFinite(nextDays) ? Math.max(1, nextDays) : null,
+                                        lastReminderSentDate: '',
+                                      });
+                                    }}
+                                    className="w-10 bg-transparent text-center text-sm font-medium text-[#4a453e] outline-none"
+                                    placeholder="5"
+                                  />
+                                  <span className="text-[10px] font-bold uppercase tracking-wider text-[#a8a38d]">days</span>
+                                </motion.div>
                               )}
-                            </div>
-
-                            {hasEventReminder && (
-                              <>
-                              <div className="flex items-center justify-between gap-3">
-                                <p className="text-sm font-serif text-[#4a453e] leading-tight">{getOneTimeReminderText(oneTimeReminderDaysAhead)}</p>
-                                <input
-                                  type="date"
-                                  value={oneTimeReminderInputValue}
-                                  onKeyDown={saveOnEnter}
-                                  onChange={(e) => setFormData({
-                                    ...formData,
-                                    oneTimeReminderDate: getIsoFromDateInputValue(e.target.value),
-                                    oneTimeReminderCreatedDate: formData.oneTimeReminderCreatedDate || new Date().toISOString(),
-                                  })}
-                                  className="bg-[#fbfaf5] border border-[#e0dbc5] rounded-xl px-3 py-1.5 text-xs text-[#4a453e] font-medium outline-none"
-                                />
-                              </div>
-                              <input
-                                type="range"
-                                min="1"
-                                max={MAX_QUICK_LOG_DAYS}
-                                value={oneTimeReminderSliderValue}
-                                onChange={(e) => setFormData({
-                                  ...formData,
-                                  oneTimeReminderDate: getIsoFromDateInputValue(getDaysFromNowDate(parseInt(e.target.value, 10))),
-                                  oneTimeReminderCreatedDate: formData.oneTimeReminderCreatedDate || new Date().toISOString(),
-                                })}
-                                className="days-ago-slider w-full"
-                                style={{ '--slider-progress': oneTimeReminderSliderProgress } as React.CSSProperties}
-                                aria-label="Event reminder days"
-                              />
-                              <div className="space-y-1">
-                                <label className="text-[10px] uppercase tracking-wider font-bold text-[#a8a38d]">Reason (optional)</label>
-                                <input
-                                  ref={eventReminderReasonInputRef}
-                                  type="text"
-                                  value={formData.oneTimeReminderReason || ''}
-                                  onChange={(e) => setFormData({ ...formData, oneTimeReminderReason: e.target.value })}
-                                  onKeyDown={saveOnEnter}
-                                  className="w-full px-3 py-2 bg-[#fbfaf5] border border-[#e0dbc5] rounded-xl focus:bg-white focus:border-[#d4ccb0] focus:ring-4 focus:ring-[#5a5a40]/10 transition-all outline-none text-sm text-[#4a453e]"
-                                  placeholder="Reach out about the LSAT"
-                                />
-                              </div>
-                              </>
-                            )}
+                            </AnimatePresence>
                           </div>
+                          <p className="text-xs text-[#8e8a75] px-1">{getContactEveryText(formData.reminderIntervalDays)}</p>
+
                         </div>
                         <div className="space-y-1.5">
                           <label className="text-[10px] uppercase tracking-wider font-bold text-[#a8a38d]">LinkedIn Profile</label>
@@ -926,6 +1314,8 @@ export function ContactModal({ contact, isOpen, onClose, onSave, onDelete, allCo
                           </div>
                         </div>
                       </div>
+
+                      {eventReminderSection}
                     </div>
 
                     <div className="pt-8 border-t border-[#f0eee0] space-y-8">

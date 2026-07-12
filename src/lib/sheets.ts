@@ -27,6 +27,13 @@ export interface ContactHistoryEntry {
   notes: string;
 }
 
+export interface ContactEventReminder {
+  id: string;
+  date: string;
+  createdDate: string;
+  reason: string;
+}
+
 export interface Contact {
   id: string;
   name: string;
@@ -44,6 +51,7 @@ export interface Contact {
   oneTimeReminderDate?: string; // ISO string
   oneTimeReminderCreatedDate?: string; // ISO string
   oneTimeReminderReason?: string;
+  eventReminders?: ContactEventReminder[];
   reminderTaskId?: string;
   reminderTaskListId?: string;
   reminderTaskDueDate?: string; // ISO string
@@ -123,7 +131,8 @@ const HEADERS = [
   'Google Reminder Task ID',
   'Google Reminder Task List ID',
   'Google Reminder Task Due Date',
-  'Google Reminder Task Link'
+  'Google Reminder Task Link',
+  'Event Reminders'
 ];
 
 async function getGoogleApiError(res: Response, fallback: string): Promise<Error> {
@@ -143,7 +152,7 @@ async function getGoogleApiError(res: Response, fallback: string): Promise<Error
 }
 
 async function ensureContactHeaders(token: string, spreadsheetId: string): Promise<void> {
-  const headerRes = await fetch(`https://sheets.googleapis.com/v4/spreadsheets/${spreadsheetId}/values/${SHEET_NAME}!A1:X1?valueInputOption=USER_ENTERED`, {
+  const headerRes = await fetch(`https://sheets.googleapis.com/v4/spreadsheets/${spreadsheetId}/values/${SHEET_NAME}!A1:Y1?valueInputOption=USER_ENTERED`, {
     method: 'PUT',
     headers: {
       Authorization: `Bearer ${token}`,
@@ -261,7 +270,7 @@ export async function findSpreadsheetCandidates(token: string): Promise<Spreadsh
 }
 
 export async function getContacts(token: string, spreadsheetId: string): Promise<Contact[]> {
-  const res = await fetch(`https://sheets.googleapis.com/v4/spreadsheets/${spreadsheetId}/values/${SHEET_NAME}!A2:X`, {
+  const res = await fetch(`https://sheets.googleapis.com/v4/spreadsheets/${spreadsheetId}/values/${SHEET_NAME}!A2:Y`, {
     headers: {
       Authorization: `Bearer ${token}`,
     },
@@ -286,6 +295,8 @@ export async function getContacts(token: string, spreadsheetId: string): Promise
     try { history = JSON.parse(row[11] || '[]'); } catch(e){}
     let categories = [];
     try { categories = JSON.parse(row[12] || '[]'); } catch(e){}
+    let eventReminders = [];
+    try { eventReminders = JSON.parse(row[24] || '[]'); } catch(e){}
 
     const reminderDays = row[7] ? parseInt(row[7], 10) : null;
 
@@ -313,7 +324,8 @@ export async function getContacts(token: string, spreadsheetId: string): Promise
       reminderTaskId: row[20] || '',
       reminderTaskListId: row[21] || '',
       reminderTaskDueDate: row[22] || '',
-      reminderTaskWebViewLink: row[23] || ''
+      reminderTaskWebViewLink: row[23] || '',
+      eventReminders
     };
   });
 }
@@ -323,7 +335,7 @@ export async function saveContacts(token: string, spreadsheetId: string, contact
 
   // We will clear the existing data and overwrite to make it simple.
   // First clear
-  const clearRes = await fetch(`https://sheets.googleapis.com/v4/spreadsheets/${spreadsheetId}/values/${SHEET_NAME}!A2:X:clear`, {
+  const clearRes = await fetch(`https://sheets.googleapis.com/v4/spreadsheets/${spreadsheetId}/values/${SHEET_NAME}!A2:Y:clear`, {
     method: 'POST',
     headers: {
       Authorization: `Bearer ${token}`,
@@ -360,10 +372,11 @@ export async function saveContacts(token: string, spreadsheetId: string, contact
     c.reminderTaskId || '',
     c.reminderTaskListId || '',
     c.reminderTaskDueDate || '',
-    c.reminderTaskWebViewLink || ''
+    c.reminderTaskWebViewLink || '',
+    JSON.stringify(c.eventReminders || [])
   ]);
 
-  const saveRes = await fetch(`https://sheets.googleapis.com/v4/spreadsheets/${spreadsheetId}/values/${SHEET_NAME}!A2:X?valueInputOption=USER_ENTERED`, {
+  const saveRes = await fetch(`https://sheets.googleapis.com/v4/spreadsheets/${spreadsheetId}/values/${SHEET_NAME}!A2:Y?valueInputOption=USER_ENTERED`, {
     method: 'PUT',
     headers: {
       Authorization: `Bearer ${token}`,
