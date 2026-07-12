@@ -25,6 +25,13 @@ interface GoalsDashboardProps {
   onClick: (contact: Contact) => void;
 }
 
+type GoalItem = {
+  id: string;
+  type: 'recurring' | 'event';
+  contact: Contact;
+  dueDate: Date;
+};
+
 const getInitials = (name: string) => {
   if (!name) return '?';
   const parts = name.trim().split(/\s+/);
@@ -70,33 +77,57 @@ export function GoalsDashboard({ contacts, onLogContact, onClick }: GoalsDashboa
     return Number.isNaN(date.getTime()) ? null : startOfDay(date);
   };
 
-  const getNextContactDate = (c: Contact) => {
-    const oneTimeReminderDate = parseContactDate(c.oneTimeReminderDate);
-    if (oneTimeReminderDate) return oneTimeReminderDate;
+  const getEventReminderDate = (contact: Contact) => parseContactDate(contact.oneTimeReminderDate);
 
-    if (!c.reminderIntervalDays || c.reminderIntervalDays <= 0) return today;
-    const lastContactDate = parseContactDate(c.lastContactDate);
-    return lastContactDate ? addDays(lastContactDate, c.reminderIntervalDays) : today;
+  const getRecurringReminderDate = (contact: Contact) => {
+    if (!contact.reminderIntervalDays || contact.reminderIntervalDays <= 0) return null;
+    const lastContactDate = parseContactDate(contact.lastContactDate);
+    return lastContactDate ? addDays(lastContactDate, contact.reminderIntervalDays) : today;
   };
 
-  const getGoalProgress = (contact: Contact) => {
-    const oneTimeReminderDate = parseContactDate(contact.oneTimeReminderDate);
-    if (oneTimeReminderDate) {
-      const createdDate = parseContactDate(contact.oneTimeReminderCreatedDate) || parseContactDate(contact.lastContactDate) || today;
-      const totalDays = Math.max(1, differenceInDays(oneTimeReminderDate, createdDate));
+  const getGoalItems = (contact: Contact): GoalItem[] => {
+    const items: GoalItem[] = [];
+    const recurringReminderDate = getRecurringReminderDate(contact);
+    const eventReminderDate = getEventReminderDate(contact);
+
+    if (recurringReminderDate) {
+      items.push({
+        id: `${contact.id}:recurring`,
+        type: 'recurring',
+        contact,
+        dueDate: recurringReminderDate,
+      });
+    }
+
+    if (eventReminderDate) {
+      items.push({
+        id: `${contact.id}:event`,
+        type: 'event',
+        contact,
+        dueDate: eventReminderDate,
+      });
+    }
+
+    return items;
+  };
+
+  const getGoalProgress = (item: GoalItem) => {
+    if (item.type === 'event') {
+      const createdDate = parseContactDate(item.contact.oneTimeReminderCreatedDate) || parseContactDate(item.contact.lastContactDate) || today;
+      const totalDays = Math.max(1, differenceInDays(item.dueDate, createdDate));
       const elapsedDays = Math.max(0, differenceInDays(today, createdDate));
       return Math.min(elapsedDays / totalDays, 1);
     }
 
-    if (!contact.lastContactDate || !contact.reminderIntervalDays) return 1;
-    const lastContact = parseContactDate(contact.lastContactDate);
+    if (!item.contact.lastContactDate || !item.contact.reminderIntervalDays) return 1;
+    const lastContact = parseContactDate(item.contact.lastContactDate);
     if (!lastContact) return 1;
     const daysSinceLastContact = Math.max(0, differenceInDays(today, lastContact));
-    return Math.min(daysSinceLastContact / contact.reminderIntervalDays, 1);
+    return Math.min(daysSinceLastContact / item.contact.reminderIntervalDays, 1);
   };
 
-  const getGoalColor = (contact: Contact) => {
-    const progress = Math.max(0, Math.min(1, getGoalProgress(contact)));
+  const getGoalColor = (item: GoalItem) => {
+    const progress = Math.max(0, Math.min(1, getGoalProgress(item)));
     const colorProgress = Math.pow(progress, 0.72);
     const tint = mixHex('#e4eee0', '#f2d2c8', colorProgress);
     const border = mixHex('#cad8bf', '#de8d76', colorProgress);
@@ -130,8 +161,16 @@ export function GoalsDashboard({ contacts, onLogContact, onClick }: GoalsDashboa
     return `Contacted ${daysSince} Days Ago`;
   };
 
-  const sortedContacts = [...contacts].sort((a, b) => {
-    return getNextContactDate(a).getTime() - getNextContactDate(b).getTime();
+  const getGoalDetailText = (item: GoalItem) => {
+    if (item.type === 'event') {
+      return item.contact.oneTimeReminderReason?.trim() || 'Event Reminder';
+    }
+
+    return getLastContactText(item.contact);
+  };
+
+  const sortedGoalItems = contacts.flatMap(getGoalItems).sort((a, b) => {
+    return a.dueDate.getTime() - b.dueDate.getTime();
   });
 
   const calendarDays = useMemo(() => {
@@ -166,7 +205,7 @@ export function GoalsDashboard({ contacts, onLogContact, onClick }: GoalsDashboa
         </div>
       </div>
 
-      {sortedContacts.length === 0 ? (
+      {sortedGoalItems.length === 0 ? (
         <div className="flex-1 flex flex-col items-center justify-center text-center">
           <Clock className="text-[#d0cdc1] mb-4" size={32} />
           <h3 className="text-[#4a453e] font-bold">No Goals Set</h3>
@@ -203,7 +242,7 @@ export function GoalsDashboard({ contacts, onLogContact, onClick }: GoalsDashboa
           <div className="flex-1 min-h-0 overflow-y-auto custom-scrollbar pr-1">
             <div className="grid min-h-[528px] grid-cols-7 auto-rows-fr overflow-hidden rounded-2xl border border-[#e0dbc5] bg-[#fbfaf5] max-sm:min-h-[430px]">
               {calendarDays.map(day => {
-                const dayContacts = sortedContacts.filter(contact => isSameDay(getNextContactDate(contact), day));
+                const dayGoalItems = sortedGoalItems.filter(item => isSameDay(item.dueDate, day));
                 const isCurrentMonth = isSameMonth(day, visibleMonth);
 
                 return (
@@ -215,11 +254,12 @@ export function GoalsDashboard({ contacts, onLogContact, onClick }: GoalsDashboa
                       {format(day, 'd')}
                     </div>
                     <div className="space-y-1">
-                      {dayContacts.slice(0, 3).map(contact => {
-                        const goalColor = getGoalColor(contact);
+                      {dayGoalItems.slice(0, 3).map(item => {
+                        const contact = item.contact;
+                        const goalColor = getGoalColor(item);
                         return (
                           <button
-                            key={contact.id}
+                            key={item.id}
                             onClick={() => onClick(contact)}
                             className="w-full max-w-full rounded-md border px-1.5 py-1 text-center text-[10px] sm:text-[11px] font-bold leading-tight transition-transform hover:-translate-y-0.5 max-sm:px-1 max-sm:text-[9px]"
                             style={{
@@ -227,15 +267,15 @@ export function GoalsDashboard({ contacts, onLogContact, onClick }: GoalsDashboa
                               borderColor: goalColor.borderColor,
                               color: goalColor.color,
                             }}
-                            title={contact.name}
+                            title={item.type === 'event' && contact.oneTimeReminderReason ? `${contact.name}: ${contact.oneTimeReminderReason}` : contact.name}
                           >
                             <span className="block whitespace-normal break-words">{getShortName(contact.name)}</span>
                           </button>
                         );
                       })}
-                      {dayContacts.length > 3 && (
+                      {dayGoalItems.length > 3 && (
                         <div className="px-1 text-center text-[10px] font-bold text-[#a8a38d]">
-                          +{dayContacts.length - 3} more
+                          +{dayGoalItems.length - 3} more
                         </div>
                       )}
                     </div>
@@ -256,10 +296,10 @@ export function GoalsDashboard({ contacts, onLogContact, onClick }: GoalsDashboa
               hidden: {},
             }}
           >
-            {sortedContacts.map((contact) => {
-              const nextContact = getNextContactDate(contact);
-              const daysUntil = differenceInDays(nextContact, today);
-              const goalColor = getGoalColor(contact);
+            {sortedGoalItems.map((item) => {
+              const contact = item.contact;
+              const daysUntil = differenceInDays(item.dueDate, today);
+              const goalColor = getGoalColor(item);
               return (
                 <motion.div
                   variants={{
@@ -267,7 +307,7 @@ export function GoalsDashboard({ contacts, onLogContact, onClick }: GoalsDashboa
                     visible: { opacity: 1, y: 0, transition: { duration: 0.3, ease: 'easeOut' } },
                   }}
                   whileHover={{ x: 4, transition: { duration: 0.2 } }}
-                  key={contact.id}
+                  key={item.id}
                   onClick={() => onClick(contact)}
                   className="cursor-pointer rounded-[18px] px-4 py-3 border transition-all hover:shadow-sm max-sm:rounded-2xl max-sm:px-3 max-sm:py-2.5"
                   style={{
@@ -295,7 +335,7 @@ export function GoalsDashboard({ contacts, onLogContact, onClick }: GoalsDashboa
                           {getDueText(daysUntil)}
                         </p>
                         <p className="text-[10px] font-bold text-[#8e8a75] mt-0.5 max-sm:text-[9px]">
-                          {getLastContactText(contact)}
+                          {getGoalDetailText(item)}
                         </p>
                       </div>
                       <button

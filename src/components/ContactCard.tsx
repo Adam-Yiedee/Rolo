@@ -1,6 +1,6 @@
 import React, { useState } from 'react';
 import { Contact } from '../lib/sheets';
-import { format, formatDistanceToNow, parseISO } from 'date-fns';
+import { differenceInCalendarDays, format, parseISO } from 'date-fns';
 import { UserRound, Heart, Clock, Plus, Tag, ChevronDown, ChevronUp } from 'lucide-react';
 import { motion, AnimatePresence } from 'motion/react';
 
@@ -41,11 +41,19 @@ export function ContactCard({ contact, onClick, onLogContact }: ContactCardProps
   const [isExpanded, setIsExpanded] = useState(false);
 
   const hasOneTimeReminder = Boolean(contact.oneTimeReminderDate);
+  const hasRecurringReminder = Boolean(contact.reminderIntervalDays && contact.reminderIntervalDays > 0);
   let lastContactStr = 'No contact logged';
   let hasLoggedContact = false;
   if (contact.lastContactDate) {
     try {
-      lastContactStr = formatDistanceToNow(parseISO(contact.lastContactDate), { addSuffix: true });
+      const daysSinceContact = differenceInCalendarDays(new Date(), parseISO(contact.lastContactDate));
+      if (daysSinceContact <= 0) {
+        lastContactStr = 'Today';
+      } else if (daysSinceContact === 1) {
+        lastContactStr = 'Yesterday';
+      } else {
+        lastContactStr = `${daysSinceContact} days ago`;
+      }
       hasLoggedContact = true;
     } catch (e) {
       // Ignore parse error
@@ -59,8 +67,8 @@ export function ContactCard({ contact, onClick, onLogContact }: ContactCardProps
       oneTimeReminderStr = 'set';
     }
   }
-  const hasReminder = hasOneTimeReminder || Boolean(contact.reminderIntervalDays && contact.reminderIntervalDays > 0);
-  const reminderLabel = hasOneTimeReminder ? `Once: ${oneTimeReminderStr}` : hasLoggedContact ? `Last: ${lastContactStr}` : lastContactStr;
+  const hasReminder = hasOneTimeReminder || hasRecurringReminder;
+  const reminderLabel = hasOneTimeReminder ? `Event: ${oneTimeReminderStr}` : hasLoggedContact ? `Last: ${lastContactStr}` : lastContactStr;
 
   const primaryCategory = contact.categories && contact.categories.length > 0 ? contact.categories[0] : null;
   const avatarColorClass = primaryCategory ? getCategoryColor(primaryCategory) : 'bg-[#f4f1e6] text-[#8e8a75]';
@@ -166,17 +174,22 @@ export function ContactCard({ contact, onClick, onLogContact }: ContactCardProps
                 </div>
                 
                 <div className="space-y-4">
-                  {hasOneTimeReminder ? (
-                    <div>
-                      <h4 className="text-[10px] font-bold uppercase tracking-wider text-[#a8a38d] mb-1">Reach Out Reminder</h4>
-                      <p>One time on {oneTimeReminderStr}</p>
-                    </div>
-                  ) : contact.reminderIntervalDays && contact.reminderIntervalDays > 0 ? (
+                  {hasRecurringReminder && (
                     <div>
                       <h4 className="text-[10px] font-bold uppercase tracking-wider text-[#a8a38d] mb-1">Reach Out Reminder</h4>
                       <p>Every {contact.reminderIntervalDays} days</p>
                     </div>
-                  ) : null}
+                  )}
+
+                  {hasOneTimeReminder && (
+                    <div>
+                      <h4 className="text-[10px] font-bold uppercase tracking-wider text-[#a8a38d] mb-1">Event Reminder</h4>
+                      <p>On {oneTimeReminderStr}</p>
+                      {contact.oneTimeReminderReason && (
+                        <p className="mt-1 text-[#8e8a75]">{contact.oneTimeReminderReason}</p>
+                      )}
+                    </div>
+                  )}
                   
                   {contact.family && (
                     <div>

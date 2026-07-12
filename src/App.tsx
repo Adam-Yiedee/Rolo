@@ -34,8 +34,8 @@ export default function App() {
   const [contacts, setContacts] = useState<Contact[]>([]);
   const [searchTerm, setSearchTerm] = useState('');
   const [selectedCategory, setSelectedCategory] = useState<string | null>(null);
-  const [sortBy, setSortBy] = useState<'name' | 'recent' | 'goals' | 'categories'>('name');
-  const [isHoveringSort, setIsHoveringSort] = useState(false);
+  const [activeTab, setActiveTab] = useState<'contacts' | 'goals'>('contacts');
+  const [contactSortBy, setContactSortBy] = useState<'name' | 'recent' | 'categories'>('name');
   const [isSearchExpanded, setIsSearchExpanded] = useState(false);
   const [isSettingsOpen, setIsSettingsOpen] = useState(false);
   const [showGraphView, setShowGraphView] = useState(false);
@@ -60,7 +60,6 @@ export default function App() {
   const [modalInitialTab, setModalInitialTab] = useState<'details' | 'history'>('details');
   
   const [loading, setLoading] = useState(false);
-  const [isMobileViewport, setIsMobileViewport] = useState(false);
   const [goalCelebration, setGoalCelebration] = useState<{ id: number; contactName: string } | null>(null);
   const celebrationTimeoutRef = useRef<number | null>(null);
 
@@ -89,14 +88,6 @@ export default function App() {
       }
     );
     return () => unsubscribe();
-  }, []);
-
-  useEffect(() => {
-    const mediaQuery = window.matchMedia('(max-width: 639px)');
-    const syncViewport = () => setIsMobileViewport(mediaQuery.matches);
-    syncViewport();
-    mediaQuery.addEventListener('change', syncViewport);
-    return () => mediaQuery.removeEventListener('change', syncViewport);
   }, []);
 
   useEffect(() => {
@@ -216,7 +207,7 @@ export default function App() {
       setContacts(loadedContacts);
       
       // Process reminders in the background
-      processReminders(token, loadedContacts, currentSpreadsheetId, userEmail, loadedReminderEmailTemplate);
+      processReminders(token, loadedContacts, currentSpreadsheetId, userEmail, loadedReminderEmailTemplate, loadedAppSettings);
     } catch (err: any) {
       console.error('Failed to load data:', err);
       alert(`Failed to load data from Google. Please ensure you have enabled the Google Sheets API and Google Drive API in your Google Cloud Console. Error: ${err.message}`);
@@ -263,13 +254,27 @@ export default function App() {
     return lastContact ? Math.max(0, differenceInDays(getToday(), lastContact)) : undefined;
   };
 
-  const getContactReminderDueDate = (contact: Contact) => {
-    const oneTimeReminderDate = parseContactDate(contact.oneTimeReminderDate);
-    if (oneTimeReminderDate) return oneTimeReminderDate;
+  const getEventReminderDueDate = (contact: Contact) => parseContactDate(contact.oneTimeReminderDate);
 
+  const getRecurringReminderDueDate = (contact: Contact) => {
     if (!contact.reminderIntervalDays || contact.reminderIntervalDays <= 0) return null;
     const lastContactDate = parseContactDate(contact.lastContactDate);
     return lastContactDate ? addDays(lastContactDate, contact.reminderIntervalDays) : getToday();
+  };
+
+  const getContactReminderDueDate = (contact: Contact) => {
+    const eventDate = getEventReminderDueDate(contact);
+    const recurringDate = getRecurringReminderDueDate(contact);
+
+    if (eventDate && recurringDate) {
+      return eventDate.getTime() <= recurringDate.getTime() ? eventDate : recurringDate;
+    }
+    return eventDate || recurringDate;
+  };
+
+  const isEventReminderDueDate = (contact: Contact, dueDate: Date) => {
+    const eventDate = getEventReminderDueDate(contact);
+    return Boolean(eventDate && eventDate.getTime() === dueDate.getTime());
   };
 
   const hasContactReminder = (contact: Contact) => Boolean(getContactReminderDueDate(contact));
@@ -305,13 +310,14 @@ export default function App() {
   const getReminderTaskPayload = (contact: Contact, dueDate: Date, template: ReminderTaskTemplate) => {
     const dueIso = dueDate.toISOString();
     const due = getGoogleTaskDueValue(dueDate);
+    const isEventReminder = isEventReminderDueDate(contact, dueDate);
     const rendered = renderReminderTaskTemplate(template, {
       contactName: contact.name,
       lastContactDate: contact.lastContactDate,
       daysSinceContact: getDaysSinceLastContact(contact),
       reminderIntervalDays: contact.reminderIntervalDays,
       dueDate: dueIso,
-      reason: contact.oneTimeReminderReason,
+      reason: isEventReminder ? contact.oneTimeReminderReason : '',
     });
 
     return {
@@ -435,6 +441,7 @@ export default function App() {
     sid: string,
     userEmail?: string,
     template: ReminderEmailTemplate = DEFAULT_REMINDER_EMAIL_TEMPLATE,
+    settings: AppSettings = getCurrentAppSettings(),
   ) => {
     if (!userEmail) return;
     let needsSave = false;
@@ -445,18 +452,39 @@ export default function App() {
 
     for (let i = 0; i < updatedContacts.length; i++) {
       const contact = updatedContacts[i];
-      const dueDate = getContactReminderDueDate(contact);
-      if (!dueDate || differenceInDays(now, dueDate) < 0) continue;
+      const eventDueDate = getEventReminderDueDate(contact);
 
-      const isOneTimeReminder = Boolean(parseContactDate(contact.oneTimeReminderDate));
+      if (eventDueDate && differenceInDays(now, eventDueDate) >= 0) {
+        try {
+          await sendReminderEmail(token, userEmail, contact.name, template, {
+            lastContactDate: contact.lastContactDate,
+            daysSinceContact: getDaysSinceLastContact(contact),
+            reminderIntervalDays: contact.reminderIntervalDays,
+            dueDate: eventDueDate.toISOString(),
+            reason: contact.oneTimeReminderReason,
+          });
+          updatedContacts[i] = {
+            ...contact,
+            lastReminderSentDate: sentAt.toISOString(),
+            oneTimeReminderDate: '',
+            oneTimeReminderCreatedDate: '',
+            oneTimeReminderReason: '',
+          };
+          needsSave = true;
+          continue;
+        } catch (e) {
+          console.error('Error sending event reminder for', contact.name, e);
+        }
+      }
+
+      const recurringDueDate = getRecurringReminderDueDate(updatedContacts[i]);
+      if (!recurringDueDate || differenceInDays(now, recurringDueDate) < 0) continue;
+
       let shouldSend = false;
-
-      if (isOneTimeReminder) {
-        shouldSend = !contact.lastReminderSentDate;
-      } else if (!contact.lastReminderSentDate) {
+      if (!updatedContacts[i].lastReminderSentDate) {
         shouldSend = true;
       } else {
-        const lastReminder = parseContactDate(contact.lastReminderSentDate);
+        const lastReminder = parseContactDate(updatedContacts[i].lastReminderSentDate);
         if (!lastReminder || differenceInDays(now, lastReminder) >= 1) {
           shouldSend = true;
         }
@@ -464,24 +492,36 @@ export default function App() {
 
       if (shouldSend) {
         try {
-          await sendReminderEmail(token, userEmail, contact.name, template, {
-            lastContactDate: contact.lastContactDate,
-            daysSinceContact: getDaysSinceLastContact(contact),
-            reminderIntervalDays: contact.reminderIntervalDays,
-            dueDate: dueDate.toISOString(),
-            reason: contact.oneTimeReminderReason,
+          await sendReminderEmail(token, userEmail, updatedContacts[i].name, template, {
+            lastContactDate: updatedContacts[i].lastContactDate,
+            daysSinceContact: getDaysSinceLastContact(updatedContacts[i]),
+            reminderIntervalDays: updatedContacts[i].reminderIntervalDays,
+            dueDate: recurringDueDate.toISOString(),
+            reason: '',
           });
-          updatedContacts[i] = { ...contact, lastReminderSentDate: sentAt.toISOString() };
+          updatedContacts[i] = { ...updatedContacts[i], lastReminderSentDate: sentAt.toISOString() };
           needsSave = true;
         } catch (e) {
-          console.error('Error sending reminder for', contact.name, e);
+          console.error('Error sending reminder for', updatedContacts[i].name, e);
         }
       }
     }
 
     if (needsSave) {
-      setContacts(updatedContacts);
-      await saveContacts(token, sid, updatedContacts);
+      let contactsToSave = updatedContacts;
+      try {
+        const taskSyncResult = await syncGoogleReminderTasks(token, contactsToSave, settings);
+        contactsToSave = taskSyncResult.contacts;
+        if (taskSyncResult.settingsChanged) {
+          setReminderTaskListId(taskSyncResult.settings.reminderTaskListId || '');
+          await saveAppSettings(token, sid, taskSyncResult.settings);
+        }
+      } catch (err) {
+        console.warn('Failed to sync Google Tasks after reminders:', err);
+      }
+
+      setContacts(contactsToSave);
+      await saveContacts(token, sid, contactsToSave);
     }
   };
 
@@ -529,10 +569,12 @@ export default function App() {
         newContacts = [...contacts, normalizedContact];
       }
       newContacts = normalizeContactsActivity(newContacts);
+      let currentSettings = getCurrentAppSettings();
 
       try {
-        const taskSyncResult = await syncGoogleReminderTasks(token, newContacts, getCurrentAppSettings());
+        const taskSyncResult = await syncGoogleReminderTasks(token, newContacts, currentSettings);
         newContacts = taskSyncResult.contacts;
+        currentSettings = taskSyncResult.settings;
         if (taskSyncResult.settingsChanged) {
           setReminderTaskListId(taskSyncResult.settings.reminderTaskListId || '');
           await saveAppSettings(token, spreadsheetId, taskSyncResult.settings);
@@ -551,7 +593,7 @@ export default function App() {
       if (metContactGoal) {
         triggerGoalCelebration(normalizedContact.name);
       }
-      processReminders(token, newContacts, spreadsheetId, user?.email || undefined, reminderEmailTemplate);
+      processReminders(token, newContacts, spreadsheetId, user?.email || undefined, currentSettings.reminderEmailTemplate, currentSettings);
     } catch (err) {
       console.error('Failed to save contact:', err);
       alert('Failed to save contact. Please try again.');
@@ -819,33 +861,31 @@ export default function App() {
     return <AuthScreen onLogin={handleLogin} isLoggingIn={isLoggingIn} />;
   }
 
-  let filteredContacts = contacts.filter(c => 
+  const searchedContacts = contacts.filter(c =>
     c.name.toLowerCase().includes(searchTerm.toLowerCase()) ||
     c.notes.toLowerCase().includes(searchTerm.toLowerCase()) ||
     c.interests.toLowerCase().includes(searchTerm.toLowerCase()) ||
     (c.categories && c.categories.some(cat => cat.toLowerCase().includes(searchTerm.toLowerCase())))
   );
 
-  if (selectedCategory) {
+  let filteredContacts = [...searchedContacts];
+
+  if (contactSortBy === 'categories' && selectedCategory) {
     filteredContacts = filteredContacts.filter(c => c.categories && c.categories.includes(selectedCategory));
   }
 
-  if (sortBy === 'goals') {
-    filteredContacts = filteredContacts.filter(hasContactReminder);
-  }
-
   filteredContacts.sort((a, b) => {
-    if (sortBy === 'name') {
+    if (contactSortBy === 'name') {
       return a.name.localeCompare(b.name);
-    } else if (sortBy === 'recent') {
+    } else if (contactSortBy === 'recent') {
       const dateA = a.lastContactDate ? new Date(a.lastContactDate).getTime() : 0;
       const dateB = b.lastContactDate ? new Date(b.lastContactDate).getTime() : 0;
       return dateB - dateA; // Descending
-    } else if (sortBy === 'goals') {
-      return getContactReminderOverdueDays(b) - getContactReminderOverdueDays(a); // Descending overdue
     }
     return 0;
   });
+
+  const goalContacts = searchedContacts.filter(hasContactReminder);
 
   const overdueCount = contacts.filter(c => getContactReminderOverdueDays(c) >= 0).length;
 
@@ -866,6 +906,15 @@ export default function App() {
     dueDate: addDays(new Date(), 2).toISOString(),
     reason: 'Follow up about job interview',
   });
+  const primaryTabs = [
+    { id: 'contacts', label: 'Contacts' },
+    { id: 'goals', label: 'Goals' },
+  ] as const;
+  const contactSortTabs = [
+    { id: 'name', label: 'A-Z' },
+    { id: 'categories', label: 'Categories' },
+    { id: 'recent', label: 'Recents' },
+  ] as const;
 
   return (
     <div className="min-h-screen bg-[#fbfaf5] text-[#4a453e] font-sans flex flex-col h-screen overflow-hidden max-sm:h-[100dvh]">
@@ -923,49 +972,62 @@ export default function App() {
       </header>
 
       <main className="max-w-7xl mx-auto px-6 flex-1 w-full flex flex-col pt-8 pb-4 min-h-0 max-sm:px-3 max-sm:pt-4 max-sm:pb-3">
-        <div className="flex flex-col sm:flex-row sm:items-center justify-between gap-4 mb-4 shrink-0 max-sm:gap-3 max-sm:mb-3">
-          <div className="flex-1 flex items-center gap-4 max-sm:w-full">
+        <div className="flex flex-col sm:flex-row sm:items-start justify-between gap-4 mb-4 shrink-0 max-sm:gap-3 max-sm:mb-3">
+          <div className="flex-1 flex flex-col gap-2 max-sm:w-full">
             <motion.div 
               layout
-              className="flex items-center bg-[#f4f1e6] rounded-full p-1 border border-[#e0dbc5] shadow-inner relative overflow-hidden inline-flex max-sm:w-full max-sm:justify-between"
-              onMouseEnter={() => setIsHoveringSort(true)}
-              onMouseLeave={() => setIsHoveringSort(false)}
+              className="flex items-center bg-[#f4f1e6] rounded-full p-1 border border-[#e0dbc5] shadow-inner relative overflow-hidden inline-flex w-fit max-sm:w-full max-sm:justify-between"
               style={{ borderRadius: 9999 }}
             >
-              <AnimatePresence initial={false} mode="popLayout">
-                {(['name', 'recent', 'goals', 'categories'] as const).map(mode => {
-                  if (!isMobileViewport && !isHoveringSort && sortBy !== mode) return null;
-                  return (
+              {primaryTabs.map(tab => (
+                <button
+                  key={tab.id}
+                  onClick={() => setActiveTab(tab.id)}
+                  className={`relative py-1.5 px-5 mx-0.5 text-xs font-bold uppercase tracking-wider rounded-full whitespace-nowrap block outline-none max-sm:flex-1 max-sm:px-3 max-sm:text-[11px] ${activeTab === tab.id ? 'text-[#5a5a40]' : 'text-[#a8a38d] hover:text-[#4a453e]'}`}
+                >
+                  {activeTab === tab.id && (
                     <motion.div
-                      layout
-                      className="max-sm:flex-1"
-                      initial={{ opacity: 0, scale: 0.8 }}
-                      animate={{ opacity: 1, scale: 1 }}
-                      exit={{ opacity: 0, scale: 0.8 }}
-                      transition={{ duration: 0.2, ease: "easeOut" }}
-                      key={mode}
-                    >
-                      <button
-                        onClick={() => setSortBy(mode)}
-                        className={`relative py-1.5 px-4 mx-0.5 text-xs font-bold uppercase tracking-wider rounded-full whitespace-nowrap block outline-none max-sm:flex-1 max-sm:px-3 max-sm:text-[11px] ${sortBy === mode ? 'text-[#5a5a40]' : 'text-[#a8a38d] hover:text-[#4a453e]'}`}
-                      >
-                        {sortBy === mode && (
-                          <motion.div
-                            layoutId="sortTab"
-                            className="absolute inset-0 bg-white shadow-sm rounded-full"
-                            style={{ zIndex: 0 }}
-                            transition={{ type: 'spring', bounce: 0.2, duration: 0.5 }}
-                          />
-                        )}
-                        <span className="relative z-10">
-                          {mode === 'name' ? 'A-Z' : mode === 'recent' ? 'Recent' : mode === 'goals' ? 'Goals' : 'Categories'}
-                        </span>
-                      </button>
-                    </motion.div>
-                  );
-                })}
-              </AnimatePresence>
+                      layoutId="primaryTab"
+                      className="absolute inset-0 bg-white shadow-sm rounded-full"
+                      style={{ zIndex: 0 }}
+                      transition={{ type: 'spring', bounce: 0.2, duration: 0.5 }}
+                    />
+                  )}
+                  <span className="relative z-10">{tab.label}</span>
+                </button>
+              ))}
             </motion.div>
+
+            <AnimatePresence initial={false}>
+              {activeTab === 'contacts' && (
+                <motion.div
+                  initial={{ opacity: 0, y: -4 }}
+                  animate={{ opacity: 1, y: 0 }}
+                  exit={{ opacity: 0, y: -4 }}
+                  transition={{ duration: 0.18, ease: 'easeOut' }}
+                  className="flex items-center bg-[#f4f1e6] rounded-full p-1 border border-[#e0dbc5] shadow-inner relative overflow-hidden inline-flex w-fit max-sm:w-full max-sm:justify-between"
+                  style={{ borderRadius: 9999 }}
+                >
+                  {contactSortTabs.map(tab => (
+                    <button
+                      key={tab.id}
+                      onClick={() => setContactSortBy(tab.id)}
+                      className={`relative py-1.5 px-4 mx-0.5 text-xs font-bold uppercase tracking-wider rounded-full whitespace-nowrap block outline-none max-sm:flex-1 max-sm:px-3 max-sm:text-[11px] ${contactSortBy === tab.id ? 'text-[#5a5a40]' : 'text-[#a8a38d] hover:text-[#4a453e]'}`}
+                    >
+                      {contactSortBy === tab.id && (
+                        <motion.div
+                          layoutId="contactSortTab"
+                          className="absolute inset-0 bg-white shadow-sm rounded-full"
+                          style={{ zIndex: 0 }}
+                          transition={{ type: 'spring', bounce: 0.2, duration: 0.5 }}
+                        />
+                      )}
+                      <span className="relative z-10">{tab.label}</span>
+                    </button>
+                  ))}
+                </motion.div>
+              )}
+            </AnimatePresence>
           </div>
           <div className="flex items-center gap-3 max-sm:w-full">
             <motion.button
@@ -980,7 +1042,7 @@ export default function App() {
           </div>
         </div>
 
-        {sortBy === 'categories' && allCategories.length > 0 && (
+        {activeTab === 'contacts' && contactSortBy === 'categories' && allCategories.length > 0 && (
           <div className="flex flex-wrap gap-2 mb-6 shrink-0 max-sm:mb-3 max-sm:max-h-20 max-sm:overflow-y-auto custom-scrollbar">
             <button
               onClick={() => setSelectedCategory(null)}
@@ -1028,10 +1090,10 @@ export default function App() {
                 setShowGraphView(false);
               }}
             />
-          ) : sortBy === 'goals' ? (
+          ) : activeTab === 'goals' ? (
             <div className="h-full pb-6 max-sm:pb-3">
               <GoalsDashboard 
-                contacts={filteredContacts} 
+                contacts={goalContacts}
                 onLogContact={(c) => openContactModal(c, 'history')} 
                 onClick={(c) => openContactModal(c, 'details')} 
               />
